@@ -169,7 +169,7 @@ class ControlProtocolTest {
             Message.Status(1), Message.Status(3),
             Message.Commit(value32), Message.Nonce("cd".repeat(32)), Message.Reveal("ef".repeat(32)),
             Message.Confirm(true), Message.Confirm(false),
-            Message.MediaOffer(1, value32, "01020304"), Message.MediaAnswer(65535, "cd".repeat(32), "ffffffff"), Message.MediaStop,
+            Message.MediaOffer(1, 1, value32, "01020304"), Message.MediaOffer(0, 2, value32, "01020304"), Message.MediaAnswer(65535, "cd".repeat(32), "ffffffff"), Message.MediaStop,
         )) {
             assertEquals(m, roundTrip(m))
         }

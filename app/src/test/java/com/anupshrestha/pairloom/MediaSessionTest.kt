@@ -2,6 +2,9 @@ package com.anupshrestha.pairloom
 
 import com.anupshrestha.pairloom.media.DirectionKey
 import com.anupshrestha.pairloom.media.MediaHeader
+import com.anupshrestha.pairloom.media.FrameSink
+import com.anupshrestha.pairloom.media.FrameSource
+import com.anupshrestha.pairloom.media.MediaKind
 import com.anupshrestha.pairloom.media.MediaNegotiation
 import com.anupshrestha.pairloom.media.MediaSealer
 import com.anupshrestha.pairloom.media.MediaSession
@@ -77,7 +80,7 @@ class MediaSessionTest {
         fun make(i: Int, server: Boolean) = MediaNegotiation(server, lo, lo, send = { m -> sides[1 - i]!!.onMessage(m) }, log = { log += "$i $it" })
         sides[0] = make(0, server = true)
         sides[1] = make(1, server = false)
-        sides[1]!!.start() // the client offers
+        sides[1]!!.start(MediaKind.TONE) // the client offers
         assertNotNull(sides[0]!!.session)
         assertNotNull(sides[1]!!.session)
         Thread.sleep(800)
@@ -97,8 +100,8 @@ class MediaSessionTest {
         fun make(i: Int, server: Boolean) = MediaNegotiation(server, lo, lo, send = { m -> queue.add(1 - i to m) })
         sides[0] = make(0, server = true)
         sides[1] = make(1, server = false)
-        sides[0]!!.start()
-        sides[1]!!.start()
+        sides[0]!!.start(MediaKind.TONE)
+        sides[1]!!.start(MediaKind.TONE)
         while (true) {
             val (to, m) = queue.poll() ?: break
             sides[to]!!.onMessage(m)
@@ -108,6 +111,81 @@ class MediaSessionTest {
         Thread.sleep(500)
         assertTrue(sides[1]!!.session!!.stats().received > 10)
         sides.forEach { it!!.close() }
+    }
+
+    /** Two negotiations wired together; messages are delivered synchronously. */
+    private fun pairedNegotiations(): Array<MediaNegotiation> {
+        val sides = arrayOfNulls<MediaNegotiation>(2)
+        fun make(i: Int, server: Boolean) = MediaNegotiation(server, lo, lo, send = { m -> sides[1 - i]!!.onMessage(m) })
+        sides[0] = make(0, server = true)
+        sides[1] = make(1, server = false)
+        return arrayOf(sides[0]!!, sides[1]!!)
+    }
+
+    @Test
+    fun aVoiceCallWaitsForTheReceiverToAccept() {
+        val (a, b) = pairedNegotiations()
+        a.start(MediaKind.VOICE)
+        assertTrue(a.isOffering)
+        assertEquals(MediaKind.VOICE, b.incomingKind)
+        assertNull(a.session)
+        assertNull(b.session)
+        b.accept()
+        assertNotNull(a.session)
+        assertNotNull(b.session)
+        assertEquals(MediaKind.VOICE, a.kind)
+        assertEquals(MediaKind.VOICE, b.kind)
+        assertNull(b.incomingKind)
+        b.stop()
+        assertNull(a.session)
+        assertNull(b.session)
+    }
+
+    @Test
+    fun aDeclinedCallStartsNothingAndClearsTheCallersOffer() {
+        val (a, b) = pairedNegotiations()
+        b.start(MediaKind.VOICE)
+        assertEquals(MediaKind.VOICE, a.incomingKind)
+        a.decline()
+        assertNull(a.incomingKind)
+        assertTrue(!b.isOffering)
+        assertNull(a.session)
+        assertNull(b.session)
+    }
+
+    @Test
+    fun theCallerCanCancelBeforeTheAnswer() {
+        val (a, b) = pairedNegotiations()
+        a.start(MediaKind.VOICE)
+        a.stop()
+        assertNull(b.incomingKind)
+        assertTrue(!a.isOffering)
+    }
+
+    /** A paced source and sink (like a microphone and speaker) drive the timing themselves. */
+    @Test
+    fun pacedSourceAndSinkDriveTheSession() {
+        class Paced : FrameSource, FrameSink {
+            val written = java.util.concurrent.atomic.AtomicLong()
+            override val paced = true
+            override val frameBytes = 960
+            override fun read(index: Long): ByteArray { Thread.sleep(10); return ByteArray(960) { index.toByte() } }
+            override fun write(frame: ByteArray) { Thread.sleep(10); written.incrementAndGet() }
+            override fun close() = Unit
+        }
+        val sa = socket(); val sb = socket()
+        val ka = DirectionKey.random(); val kb = DirectionKey.random()
+        val pa = Paced(); val pb = Paced()
+        val stopped = java.util.concurrent.atomic.AtomicInteger()
+        val a = MediaSession(sa, InetSocketAddress(lo, sb.localPort), ka, kb, source = pa, sink = pa, verify = null, onStopped = { stopped.incrementAndGet() })
+        val b = MediaSession(sb, InetSocketAddress(lo, sa.localPort), kb, ka, source = pb, sink = pb, verify = null)
+        a.start(); b.start()
+        Thread.sleep(1_000)
+        val sta = a.stop(); b.stop()
+        assertTrue("played ${sta.played}", sta.played > 40)
+        assertEquals(0L, sta.intact + sta.corrupted) // no tone verification for voice
+        assertTrue("sink writes ${pa.written.get()}", pa.written.get() > 50)
+        assertEquals(1, stopped.get())
     }
 
     @Test

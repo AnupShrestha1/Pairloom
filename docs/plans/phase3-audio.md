@@ -124,6 +124,31 @@ Consequences for A2: with both phones on different normal-Wi-Fi channels the pla
 hint) when normal Wi-Fi is on another band; prefer the host's channel (done); consider a shorter
 buffer cap in PTT, where a little more delay is acceptable anyway.
 
+## A2 results (2026-10-16, first full-duplex call)
+A 61-second voice call between the A03s (group owner) and the Redmi, earpiece, phones side by side,
+both on home Wi-Fi (group on the A03s's channel). Mute and unmute were used during the call.
+
+| | A03s | Redmi |
+|---|---|---|
+| Platform voice processing | echo canceller, noise suppressor and gain control all on | not logged (log rotated) |
+| Microphone buffer | 3840 bytes = 40 ms | — |
+| Speaker buffer | 8208 bytes = 4104 frames = **85 ms** (no low-latency audio feature) | — |
+| Network loss / concealed | 0.15 % / 1.7 % | 0 % / 2.7 % |
+| Round trip avg / max | 63 / 322 ms | 65 / 608 ms |
+| Jitter-buffer target | 160 ms | 140 ms |
+| Estimated one-way (network + buffer, no audio hardware) | 191 ms | 173 ms |
+| Rejected packets (auth / source / replay) | 0 / 0 / 0 | 0 / 0 / 0 |
+
+Findings:
+- Calls work end to end, in both directions, with the platform's voice processing on the A03s.
+- Mouth-to-ear delay is about 250-300 ms once audio hardware is added, about twice the 150 ms
+  target. The largest parts are the jitter buffer (driven by the burstiness measured in A1) and the
+  A03s's 85 ms output buffer. A5 should trim the AudioTrack buffer with `setBufferSizeInFrames`,
+  measure real mouth-to-ear delay acoustically, and repeat with normal Wi-Fi disconnected.
+- The microphone permission was granted with `adb shell pm grant` for this test; the in-app request
+  flow (ask on Call or Accept) is implemented but was not exercised on the phones.
+- Not yet assessed: subjective audio quality, echo on the speaker, and push-to-talk (A3).
+
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece
   default for full duplex, PTT for speaker use.

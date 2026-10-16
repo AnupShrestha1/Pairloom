@@ -59,12 +59,17 @@ class MediaSession(
     private val peer: InetSocketAddress,
     sendKey: DirectionKey,
     receiveKey: DirectionKey,
-    private val tone: TestTone = TestTone(),
+    private val source: FrameSource = ToneSource(),
+    private val sink: FrameSink = DiscardSink,
+    /** When set, every played frame is checked against this tone (A1 diagnostics); null for voice. */
+    private val verify: TestTone? = TestTone(),
     private val frameNanos: Long = 10_000_000L,
     private val samplesPerFrame: Int = 480,
     private val probeEvery: Int = 20,
     private val threadSetup: () -> Unit = {},
     private val log: (String) -> Unit = {},
+    /** Called once at the end of [stop], after the source and sink were closed. */
+    private val onStopped: () -> Unit = {},
 ) {
     private val sealer = MediaSealer(sendKey)
     private val opener = MediaOpener(receiveKey)
@@ -113,6 +118,9 @@ class MediaSession(
         running = false
         runCatching { socket.close() }
         threads.forEach { it.join(1_000) }
+        runCatching { source.close() }
+        runCatching { sink.close() }
+        runCatching { onStopped() }
         val s = stats()
         log("Media stopped: ${describe(s)}")
         return s
@@ -166,12 +174,19 @@ class MediaSession(
         var index = 0L
         val t0 = System.nanoTime()
         while (running) {
-            val due = t0 + index * frameNanos
-            val wait = due - System.nanoTime()
-            if (wait > 0) LockSupport.parkNanos(wait)
+            if (!source.paced) {
+                val wait = t0 + index * frameNanos - System.nanoTime()
+                if (wait > 0) LockSupport.parkNanos(wait)
+            }
+            val frame = try {
+                source.read(index) // blocks for a paced source (the microphone)
+            } catch (e: Exception) {
+                if (running) log("Media source failed: ${e.javaClass.simpleName}: ${e.message}")
+                break
+            }
             if (!running) break
             while (true) send(PacketKind.PROBE_REPLY, 0, pendingReplies.poll() ?: break)
-            send(PacketKind.AUDIO, (index * samplesPerFrame).toInt(), tone.frame(index))
+            send(PacketKind.AUDIO, (index * samplesPerFrame).toInt(), frame)
             if (index % probeEvery == 0L) {
                 send(PacketKind.PROBE, 0, ByteBuffer.allocate(8).putLong(System.nanoTime()).array())
             }
@@ -246,24 +261,33 @@ class MediaSession(
     private fun playoutLoop() {
         var tick = 0L
         val t0 = System.nanoTime()
+        val silence = ByteArray(source.frameBytes)
         while (running) {
-            val due = t0 + tick * frameNanos
-            val wait = due - System.nanoTime()
-            if (wait > 0) LockSupport.parkNanos(wait)
+            if (!sink.paced) {
+                val wait = t0 + tick * frameNanos - System.nanoTime()
+                if (wait > 0) LockSupport.parkNanos(wait)
+            }
             if (!running) break
             tick++
             val out = synchronized(lock) { buffer.pop() }
-            when (out) {
-                Playout.Buffering -> Unit
+            val frame = when (out) {
+                Playout.Buffering -> silence
                 is Playout.Frame -> {
                     played.incrementAndGet()
                     concealer.good(out.payload)
-                    if (out.payload.contentEquals(tone.frame(out.index))) intact.incrementAndGet() else corrupted.incrementAndGet()
+                    verify?.let { if (out.payload.contentEquals(it.frame(out.index))) intact.incrementAndGet() else corrupted.incrementAndGet() }
+                    out.payload
                 }
                 is Playout.Missing -> {
                     concealed.incrementAndGet()
-                    concealer.conceal(tone.frameBytes)
+                    concealer.conceal(source.frameBytes)
                 }
+            }
+            try {
+                sink.write(frame) // blocks at the device rate for a paced sink (the speaker)
+            } catch (e: Exception) {
+                if (running) log("Media sink failed: ${e.javaClass.simpleName}: ${e.message}")
+                break
             }
         }
     }

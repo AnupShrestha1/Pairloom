@@ -128,6 +128,12 @@ data class LinkDetails(
     val media: com.anupshrestha.pairloom.media.MediaStats? = null,
     val mediaActive: Boolean = false,
     val mediaOffering: Boolean = false,
+    /** What the running session carries (tone or voice), if one runs. */
+    val mediaKind: com.anupshrestha.pairloom.media.MediaKind? = null,
+    /** The other phone is calling and waits for the user. */
+    val incomingCall: Boolean = false,
+    val muted: Boolean = false,
+    val speakerOn: Boolean = false,
 )
 
 /** A paired phone as shown in the list. */
@@ -171,6 +177,8 @@ data class LinkUiState(
     /** Short form of this phone's key fingerprint, once the identity is loaded. */
     val ownKey: String? = null,
     val pairedDevices: List<PairedDeviceUi> = emptyList(),
+    /** The user refused the microphone permission; calls cannot start. */
+    val micDenied: Boolean = false,
 )
 
 /**

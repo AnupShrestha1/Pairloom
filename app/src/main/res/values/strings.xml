@@ -81,6 +81,21 @@
     <string name="linked_rtt">Round trip: last %1$s, average %2$s, min %3$s, max %4$s</string>
     <string name="rtt_none">–</string>
 
+    <!-- Calls -->
+    <string name="btn_call">Call</string>
+    <string name="btn_accept_call">Accept</string>
+    <string name="btn_decline_call">Decline</string>
+    <string name="btn_end_call">End call</string>
+    <string name="btn_mute">Mute</string>
+    <string name="btn_unmute">Unmute</string>
+    <string name="btn_speaker">Speaker</string>
+    <string name="btn_earpiece">Earpiece</string>
+    <string name="call_incoming">%1$s is calling</string>
+    <string name="call_active">In call with %1$s</string>
+    <string name="call_calling">Calling %1$s…</string>
+    <string name="call_quality">Audio replaced or lost: %1$s%% · estimated delay %2$s ms plus audio hardware</string>
+    <string name="call_mic_denied">Pairloom needs the microphone for calls. Allow it when asked, or in app settings.</string>
+
     <!-- Media (milestone A1 test tone) -->
     <string name="media_title">Media link test (tone, no microphone)</string>
     <string name="btn_start_tone">Start test tone</string>

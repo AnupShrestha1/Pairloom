@@ -44,7 +44,12 @@ class ConnectionActions(
     val onPairingAnswer: (Boolean) -> Unit,
     val onForget: (String) -> Unit,
     val onStartTone: () -> Unit,
-    val onStopTone: () -> Unit,
+    val onStopMedia: () -> Unit,
+    val onCall: () -> Unit,
+    val onAcceptCall: () -> Unit,
+    val onDeclineCall: () -> Unit,
+    val onToggleMute: () -> Unit,
+    val onToggleSpeaker: () -> Unit,
 )
 
 @Composable
@@ -93,6 +98,7 @@ fun ConnectionScreen(
             is LinkState.Discovering -> DiscoveryList(link, actions)
             is LinkState.Pairing -> PairingCard(link, actions)
             is LinkState.Linked -> {
+                CallCard(link.details, ui.micDenied, actions)
                 LinkedCard(link.details)
                 MediaCard(link.details, actions)
             }
@@ -295,14 +301,64 @@ private fun LinkedCard(details: LinkDetails) {
 }
 
 @Composable
+private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: ConnectionActions) {
+    val inCall = details.mediaActive && details.mediaKind == com.anupshrestha.pairloom.media.MediaKind.VOICE
+    val busy = details.mediaActive || details.mediaOffering
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            when {
+                details.incomingCall -> {
+                    Text(text = stringResource(R.string.call_incoming, details.peerName), style = MaterialTheme.typography.titleLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = actions.onAcceptCall) { Text(stringResource(R.string.btn_accept_call)) }
+                        OutlinedButton(onClick = actions.onDeclineCall) { Text(stringResource(R.string.btn_decline_call)) }
+                    }
+                }
+                inCall -> {
+                    Text(text = stringResource(R.string.call_active, details.peerName), style = MaterialTheme.typography.titleLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = actions.onToggleMute) {
+                            Text(stringResource(if (details.muted) R.string.btn_unmute else R.string.btn_mute))
+                        }
+                        OutlinedButton(onClick = actions.onToggleSpeaker) {
+                            Text(stringResource(if (details.speakerOn) R.string.btn_earpiece else R.string.btn_speaker))
+                        }
+                    }
+                    Button(onClick = actions.onStopMedia) { Text(stringResource(R.string.btn_end_call)) }
+                    details.media?.let { s ->
+                        Text(
+                            text = stringResource(
+                                R.string.call_quality,
+                                String.format(Locale.US, "%.1f", s.lossPercent + if (s.played + s.concealed > 0) 100.0 * s.concealed / (s.played + s.concealed) else 0.0),
+                                s.estimatedOneWayMs?.let { String.format(Locale.US, "%.0f", it) } ?: "–",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                details.mediaOffering -> {
+                    Text(text = stringResource(R.string.call_calling, details.peerName), style = MaterialTheme.typography.titleMedium)
+                    OutlinedButton(onClick = actions.onStopMedia) { Text(stringResource(R.string.btn_cancel)) }
+                }
+                else -> {
+                    Button(onClick = actions.onCall, enabled = !busy) { Text(stringResource(R.string.btn_call)) }
+                    if (micDenied) Text(text = stringResource(R.string.call_mic_denied), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MediaCard(details: LinkDetails, actions: ConnectionActions) {
+    val toneActive = details.mediaActive && details.mediaKind == com.anupshrestha.pairloom.media.MediaKind.TONE
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(text = stringResource(R.string.media_title), style = MaterialTheme.typography.titleSmall)
             when {
-                details.mediaActive -> OutlinedButton(onClick = actions.onStopTone) { Text(stringResource(R.string.btn_stop_tone)) }
-                details.mediaOffering -> Text(text = stringResource(R.string.media_starting), style = MaterialTheme.typography.bodySmall)
-                else -> Button(onClick = actions.onStartTone) { Text(stringResource(R.string.btn_start_tone)) }
+                toneActive -> OutlinedButton(onClick = actions.onStopMedia) { Text(stringResource(R.string.btn_stop_tone)) }
+                details.mediaActive || details.mediaOffering || details.incomingCall -> Unit
+                else -> OutlinedButton(onClick = actions.onStartTone) { Text(stringResource(R.string.btn_start_tone)) }
             }
             val s = details.media ?: return@Column
             fun f(v: Double?) = v?.let { String.format(Locale.US, "%.1f", it) } ?: "–"

@@ -13,7 +13,12 @@ import android.util.Log
 import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.anupshrestha.pairloom.media.CallAudio
+import com.anupshrestha.pairloom.media.DirectionKey
+import com.anupshrestha.pairloom.media.MediaKind
 import com.anupshrestha.pairloom.media.MediaNegotiation
+import com.anupshrestha.pairloom.media.MicrophoneSource
+import com.anupshrestha.pairloom.media.SpeakerSink
 import com.anupshrestha.pairloom.media.MediaSession
 import com.anupshrestha.pairloom.net.ControlChannel
 import com.anupshrestha.pairloom.net.ControlProtocol
@@ -50,6 +55,7 @@ import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
+import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -297,17 +303,96 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private var mediaPollJob: Job? = null
 
     /** Starts the test-tone media session with the linked phone. */
-    fun startTestTone() {
+    fun startTestTone() = startMedia(MediaKind.TONE)
+
+    /** Starts a voice call. The activity has already made sure RECORD_AUDIO is granted. */
+    fun startCall() = startMedia(MediaKind.VOICE)
+
+    private fun startMedia(kind: MediaKind) {
         val m = media ?: return
         if (_ui.value.link !is LinkState.Linked) return
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { m.start() }.onFailure { log("Could not start the test tone: ${it.message}") }
+            runCatching { m.start(kind) }.onFailure { log("Could not start ($kind): ${it.message}") }
         }
     }
 
-    fun stopTestTone() {
+    /** Ends the tone or the call, or cancels an outgoing call. */
+    fun stopMedia() {
         val m = media ?: return
         viewModelScope.launch(Dispatchers.IO) { runCatching { m.stop() } }
+    }
+
+    /** Accepts the incoming call. The activity has already made sure RECORD_AUDIO is granted. */
+    fun acceptCall() {
+        val m = media ?: return
+        viewModelScope.launch(Dispatchers.IO) { runCatching { m.accept() }.onFailure { log("Could not accept the call: ${it.message}") } }
+    }
+
+    fun declineCall() {
+        val m = media ?: return
+        viewModelScope.launch(Dispatchers.IO) { runCatching { m.decline() } }
+    }
+
+    fun onMicrophoneDenied() {
+        log("Microphone permission denied; calls need it")
+        _ui.update { it.copy(micDenied = true) }
+    }
+
+    fun toggleMute() {
+        callMuted = !callMuted
+        activeMic?.muted = callMuted
+        log(if (callMuted) "Microphone muted" else "Microphone unmuted")
+    }
+
+    fun toggleSpeaker() {
+        callSpeaker = !callSpeaker
+        activeCallAudio?.setSpeaker(callSpeaker)
+    }
+
+    /** Version 1 works only while the app is visible: leaving the app ends the call. */
+    fun onAppHidden() {
+        if (media?.session != null || media?.isOffering == true || media?.incomingKind != null) {
+            log("The app left the foreground; ending the media session")
+            stopMedia()
+        }
+    }
+
+    // Live call audio, so mute and route can change during the call. Set on the IO thread that
+    // starts the session; read on the main thread.
+    @Volatile private var activeMic: MicrophoneSource? = null
+    @Volatile private var activeCallAudio: CallAudio? = null
+    @Volatile private var callMuted = false
+    @Volatile private var callSpeaker = false
+
+    private fun newMediaSession(kind: MediaKind, socket: DatagramSocket, peer: InetSocketAddress, out: DirectionKey, input: DirectionKey): MediaSession {
+        val priority = { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
+        if (kind == MediaKind.TONE) return MediaSession(socket, peer, out, input, threadSetup = priority, log = { log(it) })
+        callMuted = false
+        val audio = CallAudio(app, { log(it) }) { stopMedia() }
+        audio.begin(speaker = callSpeaker)
+        val mic = try {
+            MicrophoneSource { log(it) }
+        } catch (e: Exception) {
+            audio.end()
+            throw e
+        }
+        val speaker = try {
+            SpeakerSink { log(it) }
+        } catch (e: Exception) {
+            mic.close()
+            audio.end()
+            throw e
+        }
+        activeMic = mic
+        activeCallAudio = audio
+        return MediaSession(
+            socket, peer, out, input, source = mic, sink = speaker, verify = null, threadSetup = priority, log = { log(it) },
+            onStopped = {
+                audio.end()
+                if (activeCallAudio === audio) activeCallAudio = null
+                if (activeMic === mic) activeMic = null
+            },
+        )
     }
 
     /** Media-control messages arrive on the control channel's read thread. */
@@ -323,11 +408,24 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 val m = media
                 val stats = m?.session?.stats()
                 val offering = m?.isOffering == true
-                holdWifiLock(stats != null || offering)
+                val incoming = m?.incomingKind
+                holdWifiLock(m?.isBusy == true)
                 _ui.update { s ->
                     val l = s.link
                     if (l is LinkState.Linked) {
-                        s.copy(link = l.copy(details = l.details.copy(media = stats, mediaActive = stats != null, mediaOffering = offering)))
+                        s.copy(
+                            link = l.copy(
+                                details = l.details.copy(
+                                    media = stats,
+                                    mediaActive = stats != null,
+                                    mediaOffering = offering,
+                                    mediaKind = if (stats != null) m.kind else null,
+                                    incomingCall = incoming == MediaKind.VOICE,
+                                    muted = callMuted,
+                                    speakerOn = callSpeaker,
+                                ),
+                            ),
+                        )
                     } else {
                         s
                     }
@@ -868,9 +966,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 localAddress = local,
                 peerAddress = remote,
                 send = { ch.sendMessage(it) },
-                newSession = { s, p, out, input ->
-                    MediaSession(s, p, out, input, threadSetup = { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }, log = { log(it) })
-                },
+                newSession = { kind, s, p, out, input -> newMediaSession(kind, s, p, out, input) },
                 log = { log(it) },
             )
             startMediaPoll(generation)

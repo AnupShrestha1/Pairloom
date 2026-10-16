@@ -1,7 +1,9 @@
 package com.anupshrestha.pairloom
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -65,7 +67,12 @@ class MainActivity : ComponentActivity() {
             onPairingAnswer = viewModel::answerPairing,
             onForget = viewModel::forgetDevice,
             onStartTone = viewModel::startTestTone,
-            onStopTone = viewModel::stopTestTone,
+            onStopMedia = viewModel::stopMedia,
+            onCall = { withMicrophone(viewModel::startCall) },
+            onAcceptCall = { withMicrophone(viewModel::acceptCall) },
+            onDeclineCall = viewModel::declineCall,
+            onToggleMute = viewModel::toggleMute,
+            onToggleSpeaker = viewModel::toggleSpeaker,
         )
         setContent {
             PairloomTheme {
@@ -80,6 +87,32 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.onResume()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Version 1 is foreground-only: no call continues while the app is not visible.
+        viewModel.onAppHidden()
+    }
+
+    /** What to do once the microphone permission is granted (call or accept). */
+    private var pendingMicAction: (() -> Unit)? = null
+
+    private val micPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val action = pendingMicAction
+            pendingMicAction = null
+            if (granted) action?.invoke() else viewModel.onMicrophoneDenied()
+        }
+
+    /** The microphone permission is asked for only when the user starts or accepts a call. */
+    private fun withMicrophone(action: () -> Unit) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            action()
+        } else {
+            pendingMicAction = action
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     /** Permissions are requested only when the user starts a session, never at launch. */

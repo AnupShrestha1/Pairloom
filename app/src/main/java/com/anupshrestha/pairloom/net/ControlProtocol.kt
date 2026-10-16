@@ -65,7 +65,7 @@ object ControlProtocol {
          * Starts a media session: the sender's UDP port and the key and salt it will use for the
          * packets it sends. Only ever sent inside the TLS channel.
          */
-        data class MediaOffer(val port: Int, val keyHex: String, val saltHex: String) : Message
+        data class MediaOffer(val kind: Int, val port: Int, val keyHex: String, val saltHex: String) : Message
 
         /** Accepts a [MediaOffer] with the answerer's port, key and salt. */
         data class MediaAnswer(val port: Int, val keyHex: String, val saltHex: String) : Message
@@ -135,7 +135,9 @@ object ControlProtocol {
             }
 
             is Message.MediaOffer -> {
+                require(message.kind in 0..255) { "media kind out of range" }
                 out.writeByte(TYPE_MEDIA_OFFER)
+                out.writeByte(message.kind)
                 writeMedia(out, message.port, message.keyHex, message.saltHex)
             }
 
@@ -202,7 +204,11 @@ object ControlProtocol {
             TYPE_COMMIT -> Message.Commit(decodeFixed(payload, PAIRING_VALUE_BYTES, "COMMIT"))
             TYPE_NONCE -> Message.Nonce(decodeFixed(payload, PAIRING_VALUE_BYTES, "NONCE"))
             TYPE_REVEAL -> Message.Reveal(decodeFixed(payload, PAIRING_VALUE_BYTES, "REVEAL"))
-            TYPE_MEDIA_OFFER -> readMedia(payload, "MEDIA_OFFER").let { (p, k, s) -> Message.MediaOffer(p, k, s) }
+            TYPE_MEDIA_OFFER -> {
+                if (payload.isEmpty()) throw ProtocolException("MEDIA_OFFER is empty")
+                val kind = payload[0].toInt() and 0xFF
+                readMedia(payload.copyOfRange(1, payload.size), "MEDIA_OFFER").let { (p, k, s) -> Message.MediaOffer(kind, p, k, s) }
+            }
             TYPE_MEDIA_ANSWER -> readMedia(payload, "MEDIA_ANSWER").let { (p, k, s) -> Message.MediaAnswer(p, k, s) }
             TYPE_MEDIA_STOP -> {
                 if (payload.isNotEmpty()) throw ProtocolException("MEDIA_STOP must have no payload")
