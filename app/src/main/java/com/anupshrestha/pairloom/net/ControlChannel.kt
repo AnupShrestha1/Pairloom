@@ -73,14 +73,15 @@ class ControlChannel(
 
     /**
      * Runs the heartbeat until the link ends and returns why. Reads happen on an IO thread; the
-     * ping loop runs alongside. [onStats] is called from IO threads.
+     * ping loop runs alongside. [onStats] and [onMedia] are called from IO threads; [onMedia]
+     * receives the media-control messages (offer, answer, stop).
      */
-    suspend fun run(onStats: (PingStats) -> Unit): Exit = coroutineScope {
+    suspend fun run(onStats: (PingStats) -> Unit, onMedia: (Message) -> Unit = {}): Exit = coroutineScope {
         // Session setup can take a while (pairing waits for both users), so the dead-link timer
         // starts now, not at the last setup message.
         lastRxNanos = System.nanoTime()
         val pinger = launch(Dispatchers.IO) { pingLoop(onStats) }
-        val result = withContext(Dispatchers.IO) { readLoop(onStats) }
+        val result = withContext(Dispatchers.IO) { readLoop(onStats, onMedia) }
         pinger.cancel()
         result
     }
@@ -98,7 +99,7 @@ class ControlChannel(
     /** True once [close] ran or the link ended. */
     val isClosed: Boolean get() = socket.isClosed
 
-    private fun readLoop(onStats: (PingStats) -> Unit): Exit {
+    private fun readLoop(onStats: (PingStats) -> Unit, onMedia: (Message) -> Unit): Exit {
         val result: Exit = try {
             while (true) {
                 val message = ControlProtocol.read(input)
@@ -115,6 +116,7 @@ class ControlChannel(
                         break
                     }
 
+                    is Message.MediaOffer, is Message.MediaAnswer, Message.MediaStop -> onMedia(message)
                     else -> throw ControlProtocol.ProtocolException("Unexpected $message during the heartbeat")
                 }
             }

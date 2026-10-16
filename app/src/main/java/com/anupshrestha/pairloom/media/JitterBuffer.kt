@@ -1,0 +1,177 @@
+package com.anupshrestha.pairloom.media
+
+import java.util.TreeMap
+import kotlin.math.abs
+import kotlin.math.ceil
+
+/** What the jitter buffer hands to playout for one frame period. */
+sealed interface Playout {
+    /** Still filling up before playout starts (or after a rebuffer); play silence. */
+    data object Buffering : Playout
+
+    data class Frame(val index: Long, val payload: ByteArray) : Playout
+
+    /** The frame for [index] did not arrive in time; conceal it. */
+    data class Missing(val index: Long) : Playout
+}
+
+enum class PushResult { ACCEPTED, LATE, DUPLICATE }
+
+/**
+ * Adaptive jitter buffer keyed by frame index (consecutive audio frames have consecutive indexes).
+ * Not thread-safe; the caller synchronizes.
+ *
+ * Two delay measures: the RFC 3550 jitter (exponential average of inter-arrival deviation, reported
+ * as a statistic) and the delay spread over the last [windowFrames] frames (the largest minus the
+ * smallest transit time). Bursty delivery, such as a radio time-sharing two channels, has a small
+ * average jitter but a large spread, so the target depth follows the larger of the two, clamped to
+ * [minFrames]..[maxFrames]. Playout starts once the target depth is buffered. If the buffer stays
+ * more than two frames over the target, the oldest frame is dropped at most once per [trimEvery]
+ * frame periods, so latency comes down gradually instead of throwing whole bursts away. After
+ * [rebufferAfterMissing] consecutive missing frames with an empty buffer, playout stops and
+ * buffers again.
+ */
+class JitterBuffer(
+    private val frameNanos: Long,
+    private val minFrames: Int = 3,
+    private val maxFrames: Int = 30,
+    private val rebufferAfterMissing: Int = 10,
+    private val windowFrames: Int = 200,
+    private val trimEvery: Int = 10,
+) {
+    private val frames = TreeMap<Long, ByteArray>()
+    private var playing = false
+    private var nextIndex = 0L
+    private var consecutiveMissing = 0
+    private var lastArrival: Pair<Long, Long>? = null // (index, arrival nanos)
+    private val transits = ArrayDeque<Long>()
+    private var sinceTrim = Int.MAX_VALUE
+
+    /** Largest minus smallest transit time over the recent window, in nanoseconds. */
+    var spreadNanos = 0L
+        private set
+
+    /** Current inter-arrival jitter estimate in nanoseconds. */
+    var jitterNanos = 0.0
+        private set
+
+    var dropped = 0L
+        private set
+
+    val depthFrames: Int get() = frames.size
+
+    val targetFrames: Int
+        get() {
+            val byJitter = ceil((2 * jitterNanos + frameNanos) / frameNanos).toInt()
+            val bySpread = ceil((spreadNanos + frameNanos).toDouble() / frameNanos).toInt()
+            return maxOf(byJitter, bySpread).coerceIn(minFrames, maxFrames)
+        }
+
+    fun push(index: Long, payload: ByteArray, arrivalNanos: Long): PushResult {
+        if (playing && index < nextIndex) return PushResult.LATE
+        if (frames.containsKey(index)) return PushResult.DUPLICATE
+        lastArrival?.let { (prevIndex, prevArrival) ->
+            if (index > prevIndex) {
+                val d = (arrivalNanos - prevArrival) - (index - prevIndex) * frameNanos
+                jitterNanos += (abs(d.toDouble()) - jitterNanos) / 16.0
+            }
+        }
+        if (lastArrival == null || index > lastArrival!!.first) lastArrival = index to arrivalNanos
+        transits.addLast(arrivalNanos - index * frameNanos)
+        if (transits.size > windowFrames) transits.removeFirst()
+        spreadNanos = transits.max() - transits.min()
+        frames[index] = payload
+        return PushResult.ACCEPTED
+    }
+
+    /** Called once per frame period by playout. */
+    fun pop(): Playout {
+        if (!playing) {
+            if (frames.size < targetFrames) return Playout.Buffering
+            playing = true
+            nextIndex = frames.firstKey()
+            consecutiveMissing = 0
+        }
+        // Persistently over target: drop one old frame now and then to bring latency down.
+        if (sinceTrim < Int.MAX_VALUE) sinceTrim++
+        if (frames.size > targetFrames + 2 && sinceTrim >= trimEvery) {
+            val first = frames.firstKey()
+            frames.remove(first)
+            dropped++
+            sinceTrim = 0
+            if (first >= nextIndex) nextIndex = first + 1
+        }
+        val index = nextIndex++
+        val payload = frames.remove(index)
+        if (payload != null) {
+            consecutiveMissing = 0
+            return Playout.Frame(index, payload)
+        }
+        consecutiveMissing++
+        if (consecutiveMissing >= rebufferAfterMissing && frames.isEmpty()) {
+            playing = false
+        }
+        return Playout.Missing(index)
+    }
+}
+
+/**
+ * Packet-loss concealment for 16-bit PCM: repeat the last good frame with a fade for up to
+ * [maxRepeats] frames, then silence.
+ */
+class Concealer(private val maxRepeats: Int = 3) {
+    private var last: ByteArray? = null
+    private var repeats = 0
+
+    fun good(frame: ByteArray) {
+        last = frame
+        repeats = 0
+    }
+
+    fun conceal(frameBytes: Int): ByteArray {
+        val source = last
+        if (source == null || source.size != frameBytes || repeats >= maxRepeats) return ByteArray(frameBytes)
+        repeats++
+        val gain = 1.0 - repeats.toDouble() / (maxRepeats + 1)
+        return Pcm.scale(source, gain)
+    }
+}
+
+/** 16-bit little-endian mono PCM helpers. */
+object Pcm {
+    fun scale(frame: ByteArray, gain: Double): ByteArray {
+        val out = ByteArray(frame.size)
+        for (i in 0 until frame.size / 2) {
+            val s = (frame[2 * i].toInt() and 0xFF) or (frame[2 * i + 1].toInt() shl 8)
+            val v = (s * gain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            out[2 * i] = v.toByte()
+            out[2 * i + 1] = (v shr 8).toByte()
+        }
+        return out
+    }
+}
+
+/**
+ * Deterministic test tone: frame [index] of a continuous sine. StrictMath makes it bit-identical on
+ * every device, so the receiver can check that each delivered frame is exactly what was sent.
+ */
+class TestTone(
+    private val sampleRate: Int = 48_000,
+    private val samplesPerFrame: Int = 480,
+    private val frequencyHz: Double = 440.0,
+    private val amplitude: Double = 0.3,
+) {
+    val frameBytes: Int get() = samplesPerFrame * 2
+
+    fun frame(index: Long): ByteArray {
+        val out = ByteArray(frameBytes)
+        val start = index * samplesPerFrame
+        for (i in 0 until samplesPerFrame) {
+            val n = start + i
+            val v = (StrictMath.sin(2 * Math.PI * frequencyHz * n / sampleRate) * amplitude * Short.MAX_VALUE).toInt()
+            out[2 * i] = v.toByte()
+            out[2 * i + 1] = (v shr 8).toByte()
+        }
+        return out
+    }
+}

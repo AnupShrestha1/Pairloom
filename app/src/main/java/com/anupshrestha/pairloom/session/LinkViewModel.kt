@@ -7,11 +7,14 @@ import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.anupshrestha.pairloom.media.MediaNegotiation
+import com.anupshrestha.pairloom.media.MediaSession
 import com.anupshrestha.pairloom.net.ControlChannel
 import com.anupshrestha.pairloom.net.ControlProtocol
 import com.anupshrestha.pairloom.net.LinkEndpoint
@@ -289,6 +292,51 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         teardown(finalState = null, sendBye = false)
     }
 
+    /** Media for the current link (milestone A1: test tone). Created by [onLinked]. */
+    @Volatile private var media: MediaNegotiation? = null
+    private var mediaPollJob: Job? = null
+
+    /** Starts the test-tone media session with the linked phone. */
+    fun startTestTone() {
+        val m = media ?: return
+        if (_ui.value.link !is LinkState.Linked) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { m.start() }.onFailure { log("Could not start the test tone: ${it.message}") }
+        }
+    }
+
+    fun stopTestTone() {
+        val m = media ?: return
+        viewModelScope.launch(Dispatchers.IO) { runCatching { m.stop() } }
+    }
+
+    /** Media-control messages arrive on the control channel's read thread. */
+    private fun onMediaMessage(message: ControlProtocol.Message, gen: Int) {
+        if (gen != generation) return
+        runCatching { media?.onMessage(message) }.onFailure { log("Media message failed: ${it.message}") }
+    }
+
+    private fun startMediaPoll(gen: Int) {
+        mediaPollJob?.cancel()
+        mediaPollJob = viewModelScope.launch {
+            while (gen == generation) {
+                val m = media
+                val stats = m?.session?.stats()
+                val offering = m?.isOffering == true
+                holdWifiLock(stats != null || offering)
+                _ui.update { s ->
+                    val l = s.link
+                    if (l is LinkState.Linked) {
+                        s.copy(link = l.copy(details = l.details.copy(media = stats, mediaActive = stats != null, mediaOffering = offering)))
+                    } else {
+                        s
+                    }
+                }
+                delay(MEDIA_POLL_MS)
+            }
+        }
+    }
+
     /** The user's answer to the pairing prompt: true if both phones show the same code. */
     fun answerPairing(codesMatch: Boolean) {
         val pending = pendingPairing ?: return
@@ -371,7 +419,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun createGroup(gen: Int, attempt: Int) {
         val c = controller ?: return
         requestedAtMs = SystemClock.elapsedRealtime()
-        c.createGroup { result ->
+        c.createGroup(staFrequencyMhz()) { result ->
             if (gen != generation) return@createGroup
             when {
                 result.ok -> log("createGroup accepted by the system; waiting for the group to form")
@@ -588,7 +636,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 if (!handedOver) return@launch
-                val exit = opened.run { stats -> onStats(stats, gen) }
+                val exit = opened.run(onStats = { stats -> onStats(stats, gen) }, onMedia = { m -> onMediaMessage(m, gen) })
                 withContext(Dispatchers.Main) { if (gen == generation) onChannelEnded(exit) }
             } catch (e: CancellationException) {
                 throw e
@@ -723,7 +771,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** A connection that passed mutual TLS and session negotiation. */
-    private class Established(val channel: ControlChannel, val peer: SessionPeer, val protocol: String, val cipherSuite: String)
+    private class Established(
+        val channel: ControlChannel,
+        val peer: SessionPeer,
+        val protocol: String,
+        val cipherSuite: String,
+        /** Both ends of the verified Wi-Fi Direct TCP connection; media uses the same addresses. */
+        val localAddress: java.net.InetAddress,
+        val remoteAddress: java.net.InetAddress,
+    )
 
     /** Mutual TLS, then HELLO / STATUS and, if needed, pairing. */
     private suspend fun secure(socket: Socket, isServer: Boolean, registry: SocketRegistry, gen: Int): Established {
@@ -741,7 +797,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val negotiator = SessionNegotiator(sec.identity.fingerprint, sec.installId, Build.MODEL, sec.store, { log(it) })
             val peer = negotiator.negotiate(ch, isServer, tls.peerFingerprint, PromptFor(gen))
-            return Established(ch, peer, tls.protocol, tls.cipherSuite)
+            return Established(ch, peer, tls.protocol, tls.cipherSuite, socket.localAddress, socket.inetAddress)
         } catch (e: Throwable) {
             ch.close(sendBye = false)
             throw e
@@ -804,6 +860,23 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         logStaState("linked")
         setLink(LinkState.Linked(details))
         if (details.newlyPaired) refreshPaired()
+        val local = LinkEndpoint.toIpv4(established.localAddress)
+        val remote = LinkEndpoint.toIpv4(established.remoteAddress)
+        if (local != null && remote != null) {
+            media = MediaNegotiation(
+                isServer = isGroupOwner,
+                localAddress = local,
+                peerAddress = remote,
+                send = { ch.sendMessage(it) },
+                newSession = { s, p, out, input ->
+                    MediaSession(s, p, out, input, threadSetup = { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }, log = { log(it) })
+                },
+                log = { log(it) },
+            )
+            startMediaPoll(generation)
+        } else {
+            log("Media unavailable: the link addresses are not IPv4")
+        }
     }
 
     private fun onStats(stats: PingStats, gen: Int) {
@@ -860,6 +933,11 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         socketJob = null
         pendingPairing?.cancel()
         pendingPairing = null
+        mediaPollJob?.cancel()
+        mediaPollJob = null
+        holdWifiLock(false)
+        val m = media
+        media = null
 
         val ch = channel
         val registry = sockets
@@ -876,6 +954,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         // Closing may write (the BYE), so it happens off the main thread. The registry is marked
         // closed at once, so any socket a background thread opens from now on is closed on the spot.
         thread(isDaemon = true, name = "pairloom-close") {
+            m?.let { runCatching { it.close() } }
             ch?.close(sendBye)
             registry.closeAll()
         }
@@ -903,6 +982,40 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun isLocationOn(): Boolean {
         val manager = app.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return false
         return LocationManagerCompat.isLocationEnabled(manager)
+    }
+
+    /** The channel of this phone's normal Wi-Fi connection, or null if it is not connected. */
+    @Suppress("DEPRECATION")
+    private fun staFrequencyMhz(): Int? = try {
+        val wifi = app.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        // networkId is hidden from apps without location access on Android 10+, but the
+        // supplicant state and frequency are still reported.
+        wifi?.connectionInfo?.takeIf { it.supplicantState == android.net.wifi.SupplicantState.COMPLETED }?.frequency?.takeIf { it > 0 }
+    } catch (e: SecurityException) {
+        null
+    }
+
+    /**
+     * Keeps the Wi-Fi radio out of power saving while media runs (low-latency mode on Android 10+,
+     * high-performance mode before). Released when the media session ends.
+     */
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    @Suppress("DEPRECATION")
+    private fun holdWifiLock(hold: Boolean) {
+        if (hold == (wifiLock != null)) return
+        if (!hold) {
+            runCatching { wifiLock?.release() }
+            wifiLock = null
+            log("Wi-Fi low-latency lock released")
+            return
+        }
+        val wifi = app.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        runCatching {
+            wifiLock = wifi.createWifiLock(mode, "pairloom:media").apply { setReferenceCounted(false); acquire() }
+            log("Wi-Fi ${if (Build.VERSION.SDK_INT >= 29) "low-latency" else "high-performance"} lock held for media")
+        }.onFailure { log("Could not hold a Wi-Fi lock: ${it.message}") }
     }
 
     @Suppress("DEPRECATION")
@@ -950,5 +1063,6 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val CONNECT_RETRY_DELAY_MS = 500L
         const val ADDRESS_WAIT_MS = 5_000L
         const val ADDRESS_POLL_MS = 100L
+        const val MEDIA_POLL_MS = 500L
     }
 }

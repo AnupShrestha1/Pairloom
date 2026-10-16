@@ -81,6 +81,16 @@
     <string name="linked_rtt">Round trip: last %1$s, average %2$s, min %3$s, max %4$s</string>
     <string name="rtt_none">–</string>
 
+    <!-- Media (milestone A1 test tone) -->
+    <string name="media_title">Media link test (tone, no microphone)</string>
+    <string name="btn_start_tone">Start test tone</string>
+    <string name="btn_stop_tone">Stop test tone</string>
+    <string name="media_starting">Starting…</string>
+    <string name="media_packets">Packets sent %1$d, received %2$d · frames lost %3$d (%4$s%%)</string>
+    <string name="media_frames">Played %1$d (intact %2$d, corrupted %3$d) · concealed %4$d · late %5$d</string>
+    <string name="media_timing">Round trip %1$s ms (min %2$s, max %3$s) · jitter %4$s ms · spread %7$s ms · buffer %5$s/%6$s ms</string>
+    <string name="media_security">Rejected: auth %1$d, wrong source %2$d, replay %3$d · est. one-way %4$s ms</string>
+
     <!-- Disconnected -->
     <string name="status_disconnected">Disconnected</string>
     <string name="disconnected_local">You disconnected.</string>

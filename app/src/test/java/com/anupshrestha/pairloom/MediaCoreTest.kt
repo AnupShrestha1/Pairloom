@@ -1,0 +1,215 @@
+package com.anupshrestha.pairloom
+
+import com.anupshrestha.pairloom.media.Concealer
+import com.anupshrestha.pairloom.media.DirectionKey
+import com.anupshrestha.pairloom.media.JitterBuffer
+import com.anupshrestha.pairloom.media.MediaHeader
+import com.anupshrestha.pairloom.media.MediaOpener
+import com.anupshrestha.pairloom.media.MediaSealer
+import com.anupshrestha.pairloom.media.PacketKind
+import com.anupshrestha.pairloom.media.Pcm
+import com.anupshrestha.pairloom.media.Playout
+import com.anupshrestha.pairloom.media.PushResult
+import com.anupshrestha.pairloom.media.ReplayWindow
+import com.anupshrestha.pairloom.media.TestTone
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.security.SecureRandom
+
+class MediaCoreTest {
+    private val ms = 1_000_000L
+
+    // --- header --------------------------------------------------------------------------------
+
+    @Test
+    fun headerRoundTripsAndRejectsGarbage() {
+        val h = MediaHeader(PacketKind.AUDIO, 123_456_789_012L, -5)
+        assertEquals(h, MediaHeader.decode(h.encode()))
+        assertEquals(MediaHeader.SIZE, h.encode().size)
+        assertNull(MediaHeader.decode(ByteArray(13)))
+        assertNull(MediaHeader.decode(h.encode().also { it[0] = 2 })) // other version
+        assertNull(MediaHeader.decode(h.encode().also { it[1] = 9 })) // unknown kind
+        assertNull(MediaHeader.decode(MediaHeader(PacketKind.AUDIO, 0, 0).encode().also { it[2] = 0x80.toByte() })) // negative sequence
+    }
+
+    // --- AES-GCM ---------------------------------------------------------------------------------
+
+    private val key = DirectionKey.random(SecureRandom())
+
+    @Test
+    fun sealedPacketsOpenWithTheRightKeyOnly() {
+        val payload = TestTone().frame(3)
+        val packet = MediaSealer(key).seal(MediaHeader(PacketKind.AUDIO, 7, 1440), payload)
+        assertEquals(MediaHeader.SIZE + payload.size + MediaSealer.TAG_BYTES, packet.size)
+        val opened = MediaOpener(key).open(packet)
+        assertNotNull(opened)
+        assertArrayEquals(payload, opened!!.payload)
+        assertEquals(7L, opened.header.sequence)
+        assertNull(MediaOpener(DirectionKey.random()).open(packet))
+        assertNull(MediaOpener(DirectionKey(key.key, byteArrayOf(9, 9, 9, 9))).open(packet)) // wrong salt
+    }
+
+    @Test
+    fun anyTamperingIsDetected() {
+        val packet = MediaSealer(key).seal(MediaHeader(PacketKind.AUDIO, 1, 480), ByteArray(960) { it.toByte() })
+        val opener = MediaOpener(key)
+        for (i in packet.indices step 37) {
+            val bad = packet.copyOf().also { it[i] = (it[i].toInt() xor 1).toByte() }
+            assertNull("byte $i", opener.open(bad))
+        }
+        assertNull(opener.open(packet.copyOf(packet.size - 1)))
+        assertNull(opener.open(ByteArray(10)))
+        // Changing the sequence in the header changes the nonce and the AAD: rejected.
+        val moved = packet.copyOf().also { it[9] = (it[9] + 1).toByte() }
+        assertNull(opener.open(moved))
+    }
+
+    @Test
+    fun openRespectsTheReceivedLength() {
+        val packet = MediaSealer(key).seal(MediaHeader(PacketKind.PROBE, 2, 0), ByteArray(8))
+        val buffer = packet + ByteArray(100) // like a reused receive buffer
+        assertNotNull(MediaOpener(key).open(buffer, packet.size))
+    }
+
+    @Test
+    fun keysAndSaltsHaveFixedSizes() {
+        assertTrue(runCatching { DirectionKey(ByteArray(16), ByteArray(4)) }.isFailure)
+        assertTrue(runCatching { DirectionKey(ByteArray(32), ByteArray(8)) }.isFailure)
+    }
+
+    // --- replay window -------------------------------------------------------------------------
+
+    @Test
+    fun replayWindowAcceptsEachSequenceOnce() {
+        val w = ReplayWindow(64)
+        assertTrue(w.accept(0))
+        assertFalse(w.accept(0))
+        assertTrue(w.accept(5))
+        assertTrue(w.accept(3)) // out of order inside the window
+        assertFalse(w.accept(3))
+        assertTrue(w.accept(1000)) // big jump
+        assertFalse(w.accept(5)) // far behind now
+        assertFalse(w.accept(1000 - 64))
+        assertTrue(w.accept(1000 - 63))
+        assertFalse(w.accept(-1))
+    }
+
+    @Test
+    fun replayWindowSlidesCorrectly() {
+        val w = ReplayWindow(8)
+        for (s in 0L..100L) assertTrue(w.accept(s))
+        for (s in 93L..100L) assertFalse(w.accept(s))
+        assertFalse(w.accept(92))
+        assertTrue(w.accept(102))
+        assertTrue(w.accept(101))
+    }
+
+    // --- jitter buffer -------------------------------------------------------------------------
+
+    private fun frame(i: Long) = byteArrayOf(i.toByte())
+
+    @Test
+    fun playoutStartsAfterTheTargetDepthAndPlaysInOrder() {
+        val jb = JitterBuffer(10 * ms, minFrames = 3)
+        assertEquals(Playout.Buffering, jb.pop())
+        for (i in 0L..2L) assertEquals(PushResult.ACCEPTED, jb.push(i, frame(i), i * 10 * ms))
+        val first = jb.pop() as Playout.Frame
+        assertEquals(0L, first.index)
+        assertEquals(1L, (jb.pop() as Playout.Frame).index)
+    }
+
+    @Test
+    fun missingFramesAreReportedAndLateOnesRejected() {
+        val jb = JitterBuffer(10 * ms, minFrames = 3)
+        for (i in listOf(0L, 1L, 3L)) jb.push(i, frame(i), i * 10 * ms)
+        assertEquals(0L, (jb.pop() as Playout.Frame).index)
+        assertEquals(1L, (jb.pop() as Playout.Frame).index)
+        assertEquals(Playout.Missing(2), jb.pop())
+        assertEquals(PushResult.LATE, jb.push(2, frame(2), 40 * ms))
+        assertEquals(3L, (jb.pop() as Playout.Frame).index)
+        assertEquals(PushResult.DUPLICATE, jb.push(5, frame(5), 50 * ms).let { jb.push(5, frame(5), 51 * ms) })
+    }
+
+    @Test
+    fun targetGrowsWithJitterAndStaysClamped() {
+        val steady = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 12)
+        for (i in 0L..200L) steady.push(i, frame(i), i * 10 * ms)
+        assertEquals(3, steady.targetFrames)
+        val jittery = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 12)
+        val rng = java.util.Random(1)
+        for (i in 0L..400L) jittery.push(i, frame(i), i * 10 * ms + rng.nextInt(40) * ms)
+        assertTrue("target ${jittery.targetFrames}", jittery.targetFrames in 4..12)
+        val wild = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 12)
+        for (i in 0L..400L) wild.push(i, frame(i), i * 10 * ms + (if (i % 2 == 0L) 0 else 500) * ms)
+        assertEquals(12, wild.targetFrames)
+    }
+
+    @Test
+    fun burstyDeliveryRaisesTheTargetBeyondTheAverageJitter() {
+        // Frames arrive in bursts of 10 every 100 ms (like a radio switching channels): the RFC 3550
+        // jitter stays modest, but the spread shows the 90 ms the oldest frame of a burst waited.
+        val jb = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 30)
+        for (i in 0L until 400L) jb.push(i, frame(i), (i / 10 + 1) * 100 * ms)
+        assertTrue("spread ${jb.spreadNanos / ms}", jb.spreadNanos / ms in 85..95)
+        assertTrue("target ${jb.targetFrames}", jb.targetFrames >= 10)
+    }
+
+    @Test
+    fun trimmingIsGradual() {
+        val jb = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 3, trimEvery = 10)
+        for (i in 0L..29L) jb.push(i, frame(i), i * 10 * ms) // steady, but 30 frames queued
+        repeat(20) { jb.pop() }
+        assertEquals(2L, jb.dropped) // one at the start, one 10 periods later
+    }
+
+    @Test
+    fun excessDepthIsTrimmedAndLongGapsRebuffer() {
+        val jb = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 6, rebufferAfterMissing = 4)
+        for (i in 0L..19L) jb.push(i, frame(i), 0) // a burst: 20 frames at once
+        val p = jb.pop() as Playout.Frame
+        assertTrue("trimmed to near target, played ${p.index}", p.index > 0)
+        assertTrue(jb.dropped > 0)
+        while (jb.depthFrames > 0) jb.pop()
+        repeat(4) { assertTrue(jb.pop() is Playout.Missing) }
+        assertEquals(Playout.Buffering, jb.pop()) // stopped after 4 missing with an empty buffer
+    }
+
+    // --- concealment, PCM, tone -----------------------------------------------------------------
+
+    @Test
+    fun concealmentFadesThenGoesSilent() {
+        val c = Concealer(maxRepeats = 3)
+        assertArrayEquals(ByteArray(4), c.conceal(4)) // nothing yet
+        val loud = Pcm.scale(byteArrayOf(0x00, 0x40, 0x00, 0x40), 1.0) // 16384, 16384
+        c.good(loud)
+        val levels = (1..4).map { c.conceal(4).let { f -> (f[0].toInt() and 0xFF) or (f[1].toInt() shl 8) } }
+        assertTrue(levels[0] < 16384 && levels[1] < levels[0] && levels[2] < levels[1])
+        assertEquals(0, levels[3])
+    }
+
+    @Test
+    fun pcmScalingClampsAndKeepsSign() {
+        val frame = byteArrayOf(0xFF.toByte(), 0x7F, 0x00, 0x80.toByte()) // 32767, -32768
+        val doubled = Pcm.scale(frame, 2.0)
+        assertArrayEquals(frame, doubled)
+        val half = Pcm.scale(frame, 0.5)
+        assertEquals(16383, (half[0].toInt() and 0xFF) or (half[1].toInt() shl 8))
+        assertEquals(-16384, (half[2].toInt() and 0xFF) or (half[3].toInt() shl 8))
+    }
+
+    @Test
+    fun toneIsDeterministicContinuousAndAudible() {
+        val tone = TestTone()
+        assertArrayEquals(tone.frame(1234), TestTone().frame(1234))
+        assertEquals(960, tone.frameBytes)
+        val f = tone.frame(0)
+        val peak = (0 until 480).maxOf { kotlin.math.abs((f[2 * it].toInt() and 0xFF) or (f[2 * it + 1].toInt() shl 8)) }
+        assertTrue(peak in 9000..10000) // amplitude 0.3
+        assertFalse(tone.frame(0).contentEquals(tone.frame(1)))
+    }
+}

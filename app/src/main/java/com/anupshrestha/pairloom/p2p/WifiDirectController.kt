@@ -144,19 +144,29 @@ class WifiDirectController(
      * handshake after the user accepts. If Android rejects the named group (for a reason other than
      * being busy), this falls back to the platform's default group.
      */
-    fun createGroup(done: (P2pResult) -> Unit) {
+    fun createGroup(preferredFrequencyMhz: Int? = null, done: (P2pResult) -> Unit) {
         if (Build.VERSION.SDK_INT < 29) {
             createDefaultGroup(done)
             return
         }
+        // Running the group on the same channel as this phone's normal Wi-Fi connection avoids
+        // multi-channel time sharing, which delivers packets in bursts (measured in milestone A1).
+        val frequency = preferredFrequencyMhz?.takeIf { it in 2412..2484 || it in 5160..5885 }
         val config = try {
             val credentials = GroupCredentials.generate()
             WifiP2pConfig.Builder()
                 .setNetworkName(credentials.networkName)
                 .setPassphrase(credentials.passphrase)
                 .enablePersistentMode(false)
+                .apply { if (frequency != null) setGroupOperatingFrequency(frequency) }
                 .build()
+                .also { if (frequency != null) log("Asking for the group on $frequency MHz (this phone's Wi-Fi channel)") }
         } catch (e: IllegalArgumentException) {
+            if (frequency != null) {
+                log("Group config for $frequency MHz rejected (${e.message}); trying without a fixed channel")
+                createGroup(null, done)
+                return
+            }
             log("Named group config rejected (${e.message}); using the default group")
             null
         } catch (e: IllegalStateException) {
@@ -167,9 +177,12 @@ class WifiDirectController(
             createDefaultGroup(done)
             return
         }
-        request("createGroup(named, non-persistent)", { result ->
+        request("createGroup(named, non-persistent${if (frequency != null) ", $frequency MHz" else ""})", { result ->
             if (result.ok || result.reason == WifiP2pManager.BUSY) {
                 done(result)
+            } else if (frequency != null) {
+                log("The group on $frequency MHz was refused; trying without a fixed channel")
+                createGroup(null, done)
             } else {
                 log("Named group was refused; falling back to the default group")
                 createDefaultGroup(done)

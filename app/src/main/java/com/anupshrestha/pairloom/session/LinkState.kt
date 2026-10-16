@@ -124,6 +124,10 @@ data class LinkDetails(
     val peerKey: String = "",
     /** True if the phones were paired in this session. */
     val newlyPaired: Boolean = false,
+    /** Media (milestone A1 test tone): live statistics while a session runs. */
+    val media: com.anupshrestha.pairloom.media.MediaStats? = null,
+    val mediaActive: Boolean = false,
+    val mediaOffering: Boolean = false,
 )
 
 /** A paired phone as shown in the list. */

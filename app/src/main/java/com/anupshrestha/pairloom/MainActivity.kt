@@ -64,6 +64,8 @@ class MainActivity : ComponentActivity() {
             },
             onPairingAnswer = viewModel::answerPairing,
             onForget = viewModel::forgetDevice,
+            onStartTone = viewModel::startTestTone,
+            onStopTone = viewModel::stopTestTone,
         )
         setContent {
             PairloomTheme {

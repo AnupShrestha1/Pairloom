@@ -16,7 +16,7 @@ import java.io.InputStream
  */
 object ControlProtocol {
     const val MAGIC = "PLM1"
-    const val VERSION = 2
+    const val VERSION = 3
     const val MAX_FRAME_BODY = 256
     const val MAX_NAME_BYTES = 64
     const val INSTALL_ID_BYTES = 16
@@ -31,6 +31,12 @@ object ControlProtocol {
     private const val TYPE_NONCE = 7
     private const val TYPE_REVEAL = 8
     private const val TYPE_CONFIRM = 9
+    private const val TYPE_MEDIA_OFFER = 10
+    private const val TYPE_MEDIA_ANSWER = 11
+    private const val TYPE_MEDIA_STOP = 12
+
+    const val MEDIA_KEY_BYTES = 32
+    const val MEDIA_SALT_BYTES = 4
 
     private const val PING_PAYLOAD_BYTES = 4 + 8
 
@@ -54,6 +60,18 @@ object ControlProtocol {
 
         /** Pairing: whether the sender's user confirmed that the codes match. */
         data class Confirm(val accepted: Boolean) : Message
+
+        /**
+         * Starts a media session: the sender's UDP port and the key and salt it will use for the
+         * packets it sends. Only ever sent inside the TLS channel.
+         */
+        data class MediaOffer(val port: Int, val keyHex: String, val saltHex: String) : Message
+
+        /** Accepts a [MediaOffer] with the answerer's port, key and salt. */
+        data class MediaAnswer(val port: Int, val keyHex: String, val saltHex: String) : Message
+
+        /** Ends the media session. */
+        data object MediaStop : Message
     }
 
     /** The peer sent something that is not valid protocol data. */
@@ -115,6 +133,18 @@ object ControlProtocol {
                 out.writeByte(TYPE_CONFIRM)
                 out.writeByte(if (message.accepted) 1 else 0)
             }
+
+            is Message.MediaOffer -> {
+                out.writeByte(TYPE_MEDIA_OFFER)
+                writeMedia(out, message.port, message.keyHex, message.saltHex)
+            }
+
+            is Message.MediaAnswer -> {
+                out.writeByte(TYPE_MEDIA_ANSWER)
+                writeMedia(out, message.port, message.keyHex, message.saltHex)
+            }
+
+            Message.MediaStop -> out.writeByte(TYPE_MEDIA_STOP)
         }
         val bytes = body.toByteArray()
         val frame = ByteArrayOutputStream(4 + bytes.size)
@@ -172,6 +202,13 @@ object ControlProtocol {
             TYPE_COMMIT -> Message.Commit(decodeFixed(payload, PAIRING_VALUE_BYTES, "COMMIT"))
             TYPE_NONCE -> Message.Nonce(decodeFixed(payload, PAIRING_VALUE_BYTES, "NONCE"))
             TYPE_REVEAL -> Message.Reveal(decodeFixed(payload, PAIRING_VALUE_BYTES, "REVEAL"))
+            TYPE_MEDIA_OFFER -> readMedia(payload, "MEDIA_OFFER").let { (p, k, s) -> Message.MediaOffer(p, k, s) }
+            TYPE_MEDIA_ANSWER -> readMedia(payload, "MEDIA_ANSWER").let { (p, k, s) -> Message.MediaAnswer(p, k, s) }
+            TYPE_MEDIA_STOP -> {
+                if (payload.isNotEmpty()) throw ProtocolException("MEDIA_STOP must have no payload")
+                Message.MediaStop
+            }
+
             TYPE_CONFIRM -> {
                 if (payload.size != 1 || (payload[0].toInt() and 0xFF) > 1) throw ProtocolException("CONFIRM must be 0 or 1")
                 Message.Confirm(payload[0].toInt() == 1)
@@ -212,6 +249,22 @@ object ControlProtocol {
     private fun decodeFixed(payload: ByteArray, size: Int, what: String): String {
         if (payload.size != size) throw ProtocolException("$what must carry $size bytes")
         return payload.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun writeMedia(out: DataOutputStream, port: Int, keyHex: String, saltHex: String) {
+        require(port in 1..65535) { "port out of range" }
+        out.writeShort(port)
+        out.write(fixed(keyHex, MEDIA_KEY_BYTES))
+        out.write(fixed(saltHex, MEDIA_SALT_BYTES))
+    }
+
+    private fun readMedia(payload: ByteArray, what: String): Triple<Int, String, String> {
+        if (payload.size != 2 + MEDIA_KEY_BYTES + MEDIA_SALT_BYTES) throw ProtocolException("$what has the wrong size")
+        val port = ((payload[0].toInt() and 0xFF) shl 8) or (payload[1].toInt() and 0xFF)
+        if (port == 0) throw ProtocolException("$what has port 0")
+        val key = payload.copyOfRange(2, 2 + MEDIA_KEY_BYTES).joinToString("") { "%02x".format(it) }
+        val salt = payload.copyOfRange(2 + MEDIA_KEY_BYTES, payload.size).joinToString("") { "%02x".format(it) }
+        return Triple(port, key, salt)
     }
 
     private fun fixed(hex: String, size: Int): ByteArray {

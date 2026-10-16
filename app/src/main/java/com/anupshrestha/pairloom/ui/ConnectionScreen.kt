@@ -43,6 +43,8 @@ class ConnectionActions(
     val onOpenAppSettings: () -> Unit,
     val onPairingAnswer: (Boolean) -> Unit,
     val onForget: (String) -> Unit,
+    val onStartTone: () -> Unit,
+    val onStopTone: () -> Unit,
 )
 
 @Composable
@@ -90,7 +92,10 @@ fun ConnectionScreen(
 
             is LinkState.Discovering -> DiscoveryList(link, actions)
             is LinkState.Pairing -> PairingCard(link, actions)
-            is LinkState.Linked -> LinkedCard(link.details)
+            is LinkState.Linked -> {
+                LinkedCard(link.details)
+                MediaCard(link.details, actions)
+            }
             else -> Unit
         }
 
@@ -284,6 +289,38 @@ private fun LinkedCard(details: LinkDetails) {
                     ms(stats.maxRttMs),
                 ),
                 style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaCard(details: LinkDetails, actions: ConnectionActions) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(text = stringResource(R.string.media_title), style = MaterialTheme.typography.titleSmall)
+            when {
+                details.mediaActive -> OutlinedButton(onClick = actions.onStopTone) { Text(stringResource(R.string.btn_stop_tone)) }
+                details.mediaOffering -> Text(text = stringResource(R.string.media_starting), style = MaterialTheme.typography.bodySmall)
+                else -> Button(onClick = actions.onStartTone) { Text(stringResource(R.string.btn_start_tone)) }
+            }
+            val s = details.media ?: return@Column
+            fun f(v: Double?) = v?.let { String.format(Locale.US, "%.1f", it) } ?: "–"
+            Text(
+                text = stringResource(R.string.media_packets, s.sent, s.received, s.lost, String.format(Locale.US, "%.2f", s.lossPercent)),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = stringResource(R.string.media_frames, s.played, s.intact, s.corrupted, s.concealed, s.late),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = stringResource(R.string.media_timing, f(s.rttAvgMs), f(s.rttMinMs), f(s.rttMaxMs), f(s.jitterMs), f(s.bufferMs), f(s.targetMs), f(s.spreadMs)),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = stringResource(R.string.media_security, s.authFailures, s.wrongSource, s.duplicates, f(s.estimatedOneWayMs)),
+                style = MaterialTheme.typography.bodySmall,
             )
         }
     }

@@ -169,6 +169,7 @@ class ControlProtocolTest {
             Message.Status(1), Message.Status(3),
             Message.Commit(value32), Message.Nonce("cd".repeat(32)), Message.Reveal("ef".repeat(32)),
             Message.Confirm(true), Message.Confirm(false),
+            Message.MediaOffer(1, value32, "01020304"), Message.MediaAnswer(65535, "cd".repeat(32), "ffffffff"), Message.MediaStop,
         )) {
             assertEquals(m, roundTrip(m))
         }
@@ -184,6 +185,9 @@ class ControlProtocolTest {
             frame(8),                       // REVEAL empty
             frame(9, 2),                    // CONFIRM must be 0 or 1
             frame(9),                       // CONFIRM empty
+            frame(10, *IntArray(37)),       // MEDIA_OFFER one byte short
+            frame(11, 0, 0, *IntArray(36)), // MEDIA_ANSWER with port 0
+            frame(12, 1),                   // MEDIA_STOP with payload
         )
         for (bytes in bad) {
             assertThrows(ControlProtocol.ProtocolException::class.java) { ControlProtocol.read(ByteArrayInputStream(bytes)) }

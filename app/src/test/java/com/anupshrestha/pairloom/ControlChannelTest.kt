@@ -38,8 +38,8 @@ class ControlChannelTest {
         a.sendMessage(Message.Status(1))
         b.receive(1_000)
         delay(700) // longer than the dead-link timeout, like users comparing codes
-        val ra = async(Dispatchers.IO) { a.run {} }
-        val rb = async(Dispatchers.IO) { b.run {} }
+        val ra = async(Dispatchers.IO) { a.run(onStats = {}) }
+        val rb = async(Dispatchers.IO) { b.run(onStats = {}) }
         delay(1_000) // both sides keep pinging; neither may declare the link dead
         assertTrue(!ra.isCompleted && !rb.isCompleted)
         a.close(sendBye = true)
@@ -52,7 +52,7 @@ class ControlChannelTest {
     @Test
     fun silentPeerIsDetected() = runBlocking {
         val (a, _) = pair(deadMs = 300, pingMs = 50)
-        val exit = withTimeout(3_000) { async(Dispatchers.IO) { a.run {} }.await() }
+        val exit = withTimeout(3_000) { async(Dispatchers.IO) { a.run(onStats = {}) }.await() }
         assertEquals(ControlChannel.Exit.LinkTimeout, exit)
     }
 }

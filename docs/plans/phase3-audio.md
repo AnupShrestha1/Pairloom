@@ -95,6 +95,35 @@ second (loss, jitter, buffer depth) so each phone can show the other side's rece
 5. **A5 Hardening.** Audio focus and interruptions, route changes, link loss mid-call, error and
    statistics UI, battery and CPU check over a 30-minute call.
 
+## A1 results (2026-10-16, A03s hosting, both phones on home Wi-Fi, phones next to each other)
+Synthetic 48 kHz tone, 10 ms PCM frames (960 bytes), AES-256-GCM, 30-40 s per run; the tone was
+started from each phone in turn and media flows in both directions in every run.
+
+| Run | Group channel | Round trip avg / min / max | Delay spread | Jitter-buffer target | Concealed | Loss | Played frames intact | Rejected (auth / source / replay) |
+|---|---|---|---|---|---|---|---|---|
+| 1, first jitter buffer | 2412 MHz (A03s Wi-Fi on 2462) | ~130 / 6 / 460 ms | not measured | 40-50 ms | ~36 % (buffer trimmed ~1,900 frames) | 0-0.3 % | 100 % | 0 / 0 / 0 |
+| 2, burst-aware buffer + Wi-Fi lock | 2412 MHz | 142-144 / 9 / 516-574 ms | ~250 ms | 260-270 ms | ~2 % | 0.05-0.2 % | 100 % | 0 / 0 / 0 |
+| 3, group on the host's Wi-Fi channel | **2462 MHz** | **56-66 / 9 / 183-191 ms** | **114-120 ms** | **130-140 ms** | ~2.4 % | 0-0.05 % | 100 % | 0 / 0 / 0 |
+
+Findings:
+- **Multi-channel concurrency is the main latency source.** When a phone is also connected to normal
+  Wi-Fi on another channel, its radio time-shares between the two and delivers packets in bursts.
+  Putting the group on the host's Wi-Fi channel halved the round trip and the delay spread.
+- The remaining spread most likely comes from the Redmi, whose normal Wi-Fi is on 5 GHz while the
+  group must stay on 2.4 GHz (the A03s is 2.4 GHz only). Not yet confirmed: the next check is a run
+  with normal Wi-Fi disconnected on both phones (Wi-Fi on, no network), which the user does.
+- An RFC 3550 jitter estimate alone badly underestimates bursty delivery; the buffer now sizes
+  itself from the delay spread over the last 2 s and trims gradually.
+- Encryption, authentication and source checks held throughout: no forged, replayed or misrouted
+  packet was ever played, and every played frame matched the sender's tone bit for bit.
+- Not covered yet: the Redmi as host (the A03s, with Location off, does not discover peers), and
+  distance or obstacles.
+
+Consequences for A2: with both phones on different normal-Wi-Fi channels the playout delay is about
+130 ms plus audio I/O, above the 150 ms mouth-to-ear target. Options, in order: tell the user (UI
+hint) when normal Wi-Fi is on another band; prefer the host's channel (done); consider a shorter
+buffer cap in PTT, where a little more delay is acceptable anyway.
+
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece
   default for full duplex, PTT for speaker use.
