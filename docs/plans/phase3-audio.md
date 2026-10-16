@@ -171,6 +171,30 @@ link (each phone's radio also serving its home network on another channel). The 
 with home Wi-Fi disconnected on both phones; if the spread drops, a UI hint ("disconnect from Wi-Fi
 for the lowest delay") is the cheap win. The speaker's ~65 ms is the platform floor on these phones.
 
+## Latency floor without home Wi-Fi (2026-10-16)
+Same call test with the home router switched off (both phones: Wi-Fi on, no network; group on
+2412 MHz, A03s hosting, Redmi calling), 60 s:
+
+| | Home Wi-Fi connected | No home Wi-Fi |
+|---|---|---|
+| Round trip avg / min / max | 59-69 / 5-7 / 203-317 ms | 62-74 / 7-9 / 494-698 ms |
+| Delay spread (97th percentile) | 90-152 ms | 76-81 ms |
+| Jitter-buffer target | 100-170 ms | 90-100 ms |
+| Measured speaker delay | 64-65 ms | 58-59 ms |
+| Estimated one-way | 207-214 ms | 189-206 ms |
+| Concealed / loss | 2-3 % / 0 % | 2-2.6 % / 0.14-0.26 % |
+
+Conclusion: once the group is on the host's channel, home Wi-Fi costs only about 10-20 ms. The
+remaining burstiness belongs to the Wi-Fi Direct link itself: a 7 ms minimum round trip shows the
+radio path is fast, but delivery still comes in bursts with spikes up to 700 ms, most likely client
+power saving on the Wi-Fi Direct link, which Android does not let apps control. The floor on these
+phones is therefore roughly 190-200 ms plus microphone hardware with the current design.
+
+Ideas, not yet tried: swap roles so the other phone is the client (to see which phone's power
+saving causes the bursts; needs the A03s to discover, i.e. Location on); concealment that hides more
+late frames so the buffer percentile can drop (Opus in A4 has better concealment); a lower-latency
+push-to-talk buffer is not useful, as PTT tolerates delay.
+
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece
   default for full duplex, PTT for speaker use.
