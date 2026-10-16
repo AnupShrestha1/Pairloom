@@ -29,18 +29,21 @@ data class MediaStats(
     val bufferMs: Double = 0.0,
     val targetMs: Double = 0.0,
     val jitterMs: Double = 0.0,
-    /** Delay spread (largest minus smallest transit) over the last 2 s; shows bursty delivery. */
+    /** Delay spread (97th percentile minus smallest transit) over the last 2 s; shows bursty delivery. */
     val spreadMs: Double = 0.0,
     val rttLastMs: Double? = null,
     val rttAvgMs: Double? = null,
     val rttMinMs: Double? = null,
     val rttMaxMs: Double? = null,
+    /** Measured output delay of the speaker (AudioTrack timestamps); null for the tone or if unknown. */
+    val outputLatencyMs: Double? = null,
 ) {
     /**
-     * Rough one-way estimate: half the round trip plus the jitter buffer's target playout delay
-     * (no audio I/O included). The target, not the momentary depth, is what playout converges to.
+     * One-way estimate: half the round trip, the jitter buffer's target playout delay (what playout
+     * converges to) and, for calls, the measured speaker delay plus one 10 ms microphone frame.
+     * The microphone's own hardware delay is not included.
      */
-    val estimatedOneWayMs: Double? get() = rttAvgMs?.let { it / 2 + targetMs }
+    val estimatedOneWayMs: Double? get() = rttAvgMs?.let { it / 2 + targetMs + (outputLatencyMs?.let { o -> o + 10.0 } ?: 0.0) }
 
     val lossPercent: Double
         get() = if (received + lost == 0L) 0.0 else 100.0 * lost / (received + lost)
@@ -151,6 +154,7 @@ class MediaSession(
             rttAvgMs = if (rttCount == 0) null else rttSum / rttCount,
             rttMinMs = rttMin,
             rttMaxMs = rttMax,
+            outputLatencyMs = lastOutputLatencyMs,
         )
     }
 
@@ -169,6 +173,9 @@ class MediaSession(
     // The send loop is the only user of the sealer and the sequence counter. Probe replies are
     // queued here so that every packet is sealed on this one thread.
     private val pendingReplies = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+
+    /** Last speaker delay measured during playout (the sink cannot report it once closed). */
+    @Volatile private var lastOutputLatencyMs: Double? = null
 
     private fun sendLoop() {
         var index = 0L
@@ -285,6 +292,7 @@ class MediaSession(
             }
             try {
                 sink.write(frame) // blocks at the device rate for a paced sink (the speaker)
+                if (tick % 50 == 0L) runCatching { sink.latencyMs }.getOrNull()?.let { lastOutputLatencyMs = it }
             } catch (e: Exception) {
                 if (running) log("Media sink failed: ${e.javaClass.simpleName}: ${e.message}")
                 break
@@ -295,12 +303,13 @@ class MediaSession(
     companion object {
         fun describe(s: MediaStats): String = String.format(
             java.util.Locale.US,
-            "%d s, sent %d, received %d, lost %d (%.2f%%), late %d, dup %d, auth-fail %d, wrong-source %d, played %d (intact %d, corrupted %d), concealed %d, dropped %d, buffer %.0f/%.0f ms, jitter %.1f ms, spread %.0f ms, rtt avg %s min %s max %s ms, est. one-way %s ms",
+            "%d s, sent %d, received %d, lost %d (%.2f%%), late %d, dup %d, auth-fail %d, wrong-source %d, played %d (intact %d, corrupted %d), concealed %d, dropped %d, buffer %.0f/%.0f ms, jitter %.1f ms, spread %.0f ms, rtt avg %s min %s max %s ms, speaker %s ms, est. one-way %s ms",
             s.uptimeMs / 1000, s.sent, s.received, s.lost, s.lossPercent, s.late, s.duplicates, s.authFailures, s.wrongSource,
             s.played, s.intact, s.corrupted, s.concealed, s.droppedForLatency, s.bufferMs, s.targetMs, s.jitterMs, s.spreadMs,
             s.rttAvgMs?.let { "%.1f".format(java.util.Locale.US, it) } ?: "-",
             s.rttMinMs?.let { "%.1f".format(java.util.Locale.US, it) } ?: "-",
             s.rttMaxMs?.let { "%.1f".format(java.util.Locale.US, it) } ?: "-",
+            s.outputLatencyMs?.let { "%.0f".format(java.util.Locale.US, it) } ?: "-",
             s.estimatedOneWayMs?.let { "%.0f".format(java.util.Locale.US, it) } ?: "-",
         )
     }

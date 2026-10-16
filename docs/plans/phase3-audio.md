@@ -149,6 +149,28 @@ Findings:
   flow (ask on Call or Accept) is implemented but was not exercised on the phones.
 - Not yet assessed: subjective audio quality, echo on the speaker, and push-to-talk (A3).
 
+## Latency pass after A2 (2026-10-16)
+Changes: the speaker uses only two device bursts of its buffer and grows by one burst per underrun
+(A03s: burst 256 frames, settles at 1024 frames = 21 ms instead of 4104 = 85 ms); the jitter
+buffer sizes itself from the 97th-percentile delay spread, so a rare spike no longer holds it high;
+the speaker delay is now measured from AudioTrack timestamps. Also fixed: rotating a phone ended the
+call (a configuration change stops the activity; the call now survives it).
+
+Two 55-60 s calls, same set-up as A2 (both phones on home Wi-Fi):
+
+| | Before | After |
+|---|---|---|
+| Speaker buffer in use (A03s) | 85 ms | 21 ms |
+| Measured speaker delay | — | 64-65 ms on both phones (mixer and HAL included) |
+| Jitter-buffer target | 140-160 ms | 100-170 ms (follows the measured spread, 90-152 ms) |
+| Estimated mouth-to-ear (network/2 + buffer + speaker + 10 ms microphone frame) | about 250-300 ms | 207-214 ms, plus microphone hardware |
+| Concealed / network loss | ~2 % / 0-0.15 % | 2-3 % / 0 % |
+
+What is left: the jitter buffer is now the largest part, and it is sized by real burstiness on the
+link (each phone's radio also serving its home network on another channel). The next measurement is
+with home Wi-Fi disconnected on both phones; if the spread drops, a UI hint ("disconnect from Wi-Fi
+for the lowest delay") is the cheap win. The speaker's ~65 ms is the platform floor on these phones.
+
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece
   default for full duplex, PTT for speaker use.

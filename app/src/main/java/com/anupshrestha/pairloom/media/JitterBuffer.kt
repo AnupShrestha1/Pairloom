@@ -22,8 +22,8 @@ enum class PushResult { ACCEPTED, LATE, DUPLICATE }
  * Not thread-safe; the caller synchronizes.
  *
  * Two delay measures: the RFC 3550 jitter (exponential average of inter-arrival deviation, reported
- * as a statistic) and the delay spread over the last [windowFrames] frames (the largest minus the
- * smallest transit time). Bursty delivery, such as a radio time-sharing two channels, has a small
+ * as a statistic) and the delay spread over the last [windowFrames] frames (the [spreadPercentile]
+ * transit time minus the smallest). Bursty delivery, such as a radio time-sharing two channels, has a small
  * average jitter but a large spread, so the target depth follows the larger of the two, clamped to
  * [minFrames]..[maxFrames]. Playout starts once the target depth is buffered. If the buffer stays
  * more than two frames over the target, the oldest frame is dropped at most once per [trimEvery]
@@ -38,6 +38,12 @@ class JitterBuffer(
     private val rebufferAfterMissing: Int = 10,
     private val windowFrames: Int = 200,
     private val trimEvery: Int = 10,
+    /**
+     * Which transit-time percentile the spread is measured to. Below 1.0 a rare spike (seen up to
+     * 600 ms on the test phones) no longer holds the buffer high; frames beyond it arrive late and
+     * are concealed instead.
+     */
+    private val spreadPercentile: Double = 0.97,
 ) {
     private val frames = TreeMap<Long, ByteArray>()
     private var playing = false
@@ -47,7 +53,7 @@ class JitterBuffer(
     private val transits = ArrayDeque<Long>()
     private var sinceTrim = Int.MAX_VALUE
 
-    /** Largest minus smallest transit time over the recent window, in nanoseconds. */
+    /** [spreadPercentile] minus smallest transit time over the recent window, in nanoseconds. */
     var spreadNanos = 0L
         private set
 
@@ -79,7 +85,9 @@ class JitterBuffer(
         if (lastArrival == null || index > lastArrival!!.first) lastArrival = index to arrivalNanos
         transits.addLast(arrivalNanos - index * frameNanos)
         if (transits.size > windowFrames) transits.removeFirst()
-        spreadNanos = transits.max() - transits.min()
+        val sorted = transits.sorted()
+        val high = sorted[((sorted.size - 1) * spreadPercentile).toInt().coerceIn(0, sorted.size - 1)]
+        spreadNanos = high - sorted.first()
         frames[index] = payload
         return PushResult.ACCEPTED
     }

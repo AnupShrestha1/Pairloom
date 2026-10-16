@@ -91,8 +91,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Version 1 is foreground-only: no call continues while the app is not visible.
-        viewModel.onAppHidden()
+        // Version 1 is foreground-only: no call continues while the app is not visible. A rotation
+        // or other configuration change also stops the activity, but the call (held by the view
+        // model) must survive it.
+        if (!isChangingConfigurations) viewModel.onAppHidden()
     }
 
     /** What to do once the microphone permission is granted (call or accept). */

@@ -160,6 +160,19 @@ class MediaCoreTest {
     }
 
     @Test
+    fun aRareSpikeDoesNotHoldTheBufferHigh() {
+        // Steady delivery with one 600 ms spike (as seen on the phones): the 97th-percentile
+        // spread ignores it, so the target stays at the minimum and that one frame arrives late.
+        val jb = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 30)
+        for (i in 0L until 200L) jb.push(i, frame(i), i * 10 * ms + if (i == 150L) 600 * ms else 0)
+        assertEquals(3, jb.targetFrames)
+        // Frequent delay (every 10th frame 80 ms late) is not a rare spike and still counts.
+        val often = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 30)
+        for (i in 0L until 200L) often.push(i, frame(i), i * 10 * ms + if (i % 10 == 0L) 80 * ms else 0)
+        assertTrue("target ${often.targetFrames}", often.targetFrames >= 8)
+    }
+
+    @Test
     fun trimmingIsGradual() {
         val jb = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 3, trimEvery = 10)
         for (i in 0L..29L) jb.push(i, frame(i), i * 10 * ms) // steady, but 30 frames queued

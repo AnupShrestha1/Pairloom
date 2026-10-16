@@ -22,6 +22,9 @@ interface FrameSource {
 interface FrameSink {
     val paced: Boolean
 
+    /** Measured delay from [write] until the audio leaves the device, if the sink can tell. */
+    val latencyMs: Double? get() = null
+
     fun write(frame: ByteArray)
 
     fun close() {}

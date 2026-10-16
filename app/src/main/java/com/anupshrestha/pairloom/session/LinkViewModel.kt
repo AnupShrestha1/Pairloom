@@ -377,7 +377,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             throw e
         }
         val speaker = try {
-            SpeakerSink { log(it) }
+            val burst = (app.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager)
+                ?.getProperty(android.media.AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 480
+            SpeakerSink({ log(it) }, framesPerBurst = burst)
         } catch (e: Exception) {
             mic.close()
             audio.end()

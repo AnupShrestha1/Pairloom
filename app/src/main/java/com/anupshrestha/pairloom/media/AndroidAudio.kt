@@ -81,10 +81,21 @@ class MicrophoneSource(private val log: (String) -> Unit) : FrameSource {
     }
 }
 
-/** The voice-communication output stream, 48 kHz mono 16-bit, low-latency mode, written per frame. */
-class SpeakerSink(private val log: (String) -> Unit) : FrameSink {
+/**
+ * The voice-communication output stream, 48 kHz mono 16-bit, low-latency mode, written per frame.
+ *
+ * The stream's buffer is allocated at the platform minimum, but only a small part of it is used:
+ * the effective size starts at two device bursts ([framesPerBurst], from AudioManager) and grows
+ * by one burst whenever the device reports an underrun, up to the allocated capacity. The delay
+ * actually added is measured with AudioTrack timestamps ([latencyMs]).
+ */
+class SpeakerSink(private val log: (String) -> Unit, private val framesPerBurst: Int = FRAME_SAMPLES) : FrameSink {
     override val paced = true
     private val track: AudioTrack
+    @Volatile private var framesWritten = 0L
+    private var writes = 0
+    private var underruns = 0
+    private val timestamp = android.media.AudioTimestamp()
 
     init {
         val min = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -112,8 +123,11 @@ class SpeakerSink(private val log: (String) -> Unit) : FrameSink {
             track.release()
             throw IOException("the speaker could not be opened")
         }
+        val capacity = track.bufferCapacityInFrames
+        val wanted = (2 * maxOf(framesPerBurst, 1)).coerceAtMost(capacity)
+        val applied = track.setBufferSizeInFrames(wanted)
         track.play()
-        log("Speaker open: buffer $size bytes (minimum $min), ${track.bufferSizeInFrames} frames")
+        log("Speaker open: capacity $capacity frames (minimum $min bytes), using $applied frames (${applied / 48} ms), burst $framesPerBurst")
     }
 
     override fun write(frame: ByteArray) {
@@ -123,7 +137,31 @@ class SpeakerSink(private val log: (String) -> Unit) : FrameSink {
             if (n < 0) throw IOException("speaker write failed ($n)")
             done += n
         }
+        framesWritten += frame.size / 2
+        if (++writes % 50 == 0) {
+            val now = track.underrunCount
+            if (now > underruns) {
+                underruns = now
+                val bigger = (track.bufferSizeInFrames + maxOf(framesPerBurst, 1)).coerceAtMost(track.bufferCapacityInFrames)
+                if (bigger > track.bufferSizeInFrames) {
+                    val applied = track.setBufferSizeInFrames(bigger)
+                    log("Speaker underran ($now so far); buffer now $applied frames (${applied / 48} ms)")
+                }
+            }
+        }
     }
+
+    /**
+     * Frames written but not yet heard, from the latest presentation timestamp, extrapolated to
+     * now. Null until the device reports a timestamp.
+     */
+    override val latencyMs: Double?
+        get() = synchronized(timestamp) {
+            if (!runCatching { track.getTimestamp(timestamp) }.getOrDefault(false)) return null
+            val elapsedFrames = (System.nanoTime() - timestamp.nanoTime) * SAMPLE_RATE / 1_000_000_000L
+            val pending = framesWritten - (timestamp.framePosition + elapsedFrames)
+            (pending.coerceAtLeast(0) * 1000.0 / SAMPLE_RATE)
+        }
 
     override fun close() {
         runCatching { track.pause() }
