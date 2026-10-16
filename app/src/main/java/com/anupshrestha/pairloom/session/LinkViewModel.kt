@@ -308,6 +308,17 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     /** Starts a voice call. The activity has already made sure RECORD_AUDIO is granted. */
     fun startCall() = startMedia(MediaKind.VOICE)
 
+    /** Starts a push-to-talk session. The activity has already made sure RECORD_AUDIO is granted. */
+    fun startPushToTalk() = startMedia(MediaKind.PTT)
+
+    /** Push-to-talk: the user pressed (true) or released (false) the talk button. */
+    fun setTalking(talking: Boolean) {
+        val s = media?.session ?: return
+        if (media?.kind != MediaKind.PTT) return
+        if (s.talking != talking) log(if (talking) "Talk button pressed" else "Talk button released")
+        s.talking = talking
+    }
+
     private fun startMedia(kind: MediaKind) {
         val m = media ?: return
         if (_ui.value.link !is LinkState.Linked) return
@@ -368,6 +379,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val priority = { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
         if (kind == MediaKind.TONE) return MediaSession(socket, peer, out, input, threadSetup = priority, log = { log(it) })
         callMuted = false
+        // Calls start on the earpiece; push-to-talk on the speaker, like a walkie-talkie.
+        callSpeaker = kind == MediaKind.PTT
         val audio = CallAudio(app, { log(it) }) { stopMedia() }
         audio.begin(speaker = callSpeaker)
         val mic = try {
@@ -389,6 +402,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         activeCallAudio = audio
         return MediaSession(
             socket, peer, out, input, source = mic, sink = speaker, verify = null, threadSetup = priority, log = { log(it) },
+            pushToTalk = kind == MediaKind.PTT,
             onStopped = {
                 audio.end()
                 if (activeCallAudio === audio) activeCallAudio = null
@@ -422,7 +436,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                                     mediaActive = stats != null,
                                     mediaOffering = offering,
                                     mediaKind = if (stats != null) m.kind else null,
-                                    incomingCall = incoming == MediaKind.VOICE,
+                                    incomingCall = incoming?.needsAccept == true,
+                                    incomingKind = incoming,
                                     muted = callMuted,
                                     speakerOn = callSpeaker,
                                 ),
@@ -432,7 +447,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                         s
                     }
                 }
-                delay(MEDIA_POLL_MS)
+                // Faster while push-to-talk runs, so the "talking" indicator follows the voice.
+                delay(if (m?.kind == MediaKind.PTT) PTT_POLL_MS else MEDIA_POLL_MS)
             }
         }
     }
@@ -1162,5 +1178,6 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val ADDRESS_WAIT_MS = 5_000L
         const val ADDRESS_POLL_MS = 100L
         const val MEDIA_POLL_MS = 500L
+        const val PTT_POLL_MS = 100L
     }
 }

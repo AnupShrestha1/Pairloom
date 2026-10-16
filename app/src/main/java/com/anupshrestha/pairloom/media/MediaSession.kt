@@ -37,6 +37,12 @@ data class MediaStats(
     val rttMaxMs: Double? = null,
     /** Measured output delay of the speaker (AudioTrack timestamps); null for the tone or if unknown. */
     val outputLatencyMs: Double? = null,
+    /** Push-to-talk: this phone is sending (button held, or the short hangover after release). */
+    val talking: Boolean = false,
+    /** Push-to-talk: the other phone's voice is being played right now. */
+    val peerTalking: Boolean = false,
+    /** Push-to-talk: talk spurts received so far. */
+    val spurts: Long = 0,
 ) {
     /**
      * One-way estimate: half the round trip, the jitter buffer's target playout delay (what playout
@@ -56,6 +62,12 @@ data class MediaStats(
  * dropped before decryption.
  *
  * Three threads (send, receive, playout); [stop] closes the socket and joins them.
+ *
+ * With [pushToTalk], the source is still read every frame (the microphone keeps its clock and its
+ * echo canceller keeps adapting), but audio is sent only while [talking] is set and for
+ * [hangoverFrames] after it is cleared, so the end of the last word is not cut. When a spurt ends,
+ * a TALK_END packet (sent three times) tells the peer the index of its last frame. Probes are sent
+ * throughout, so the round trip stays measured and the radio stays awake between spurts.
  */
 class MediaSession(
     private val socket: DatagramSocket,
@@ -73,7 +85,15 @@ class MediaSession(
     private val log: (String) -> Unit = {},
     /** Called once at the end of [stop], after the source and sink were closed. */
     private val onStopped: () -> Unit = {},
+    private val pushToTalk: Boolean = false,
+    private val hangoverFrames: Int = 15,
 ) {
+    /** Push-to-talk: the local user holds the talk button. Ignored without [pushToTalk]. */
+    @Volatile var talking = false
+
+    @Volatile private var sendingSpurt = false
+    @Volatile private var lastPeerFrameNanos = 0L
+
     private val sealer = MediaSealer(sendKey)
     private val opener = MediaOpener(receiveKey)
     private val replay = ReplayWindow()
@@ -98,6 +118,10 @@ class MediaSession(
     private var firstIndex = -1L
     private var highestIndex = -1L
     private var audioReceived = 0L
+
+    // Loss is counted per talk spurt in push-to-talk, so the silence between spurts is not loss.
+    private var lostInEndedSpurts = 0L
+    private var spurts = 0L
 
     private var rttCount = 0
     private var rttSum = 0.0
@@ -130,7 +154,7 @@ class MediaSession(
     }
 
     fun stats(): MediaStats = synchronized(lock) {
-        val lost = if (firstIndex < 0) 0 else (highestIndex - firstIndex + 1 - audioReceived).coerceAtLeast(0)
+        val lost = lostInEndedSpurts + if (firstIndex < 0) 0 else (highestIndex - firstIndex + 1 - audioReceived).coerceAtLeast(0)
         val ms = frameNanos / 1e6
         MediaStats(
             uptimeMs = if (startNanos == 0L) 0 else (System.nanoTime() - startNanos) / 1_000_000,
@@ -155,6 +179,9 @@ class MediaSession(
             rttMinMs = rttMin,
             rttMaxMs = rttMax,
             outputLatencyMs = lastOutputLatencyMs,
+            talking = sendingSpurt,
+            peerTalking = lastPeerFrameNanos != 0L && System.nanoTime() - lastPeerFrameNanos < PEER_TALKING_NANOS,
+            spurts = spurts,
         )
     }
 
@@ -177,6 +204,9 @@ class MediaSession(
     /** Last speaker delay measured during playout (the sink cannot report it once closed). */
     @Volatile private var lastOutputLatencyMs: Double? = null
 
+    private var hangover = 0
+    private var lastSentIndex = -1L
+
     private fun sendLoop() {
         var index = 0L
         val t0 = System.nanoTime()
@@ -193,7 +223,23 @@ class MediaSession(
             }
             if (!running) break
             while (true) send(PacketKind.PROBE_REPLY, 0, pendingReplies.poll() ?: break)
-            send(PacketKind.AUDIO, (index * samplesPerFrame).toInt(), frame)
+            if (!pushToTalk) {
+                send(PacketKind.AUDIO, (index * samplesPerFrame).toInt(), frame)
+            } else {
+                if (talking) hangover = hangoverFrames
+                if (talking || hangover > 0) {
+                    if (!talking) hangover--
+                    if (!sendingSpurt) log("Media: talk spurt starts at frame $index")
+                    sendingSpurt = true
+                    send(PacketKind.AUDIO, (index * samplesPerFrame).toInt(), frame)
+                    lastSentIndex = index
+                } else if (sendingSpurt) {
+                    sendingSpurt = false
+                    val end = ByteBuffer.allocate(8).putLong(lastSentIndex).array()
+                    repeat(3) { send(PacketKind.TALK_END, 0, end) }
+                    log("Media: talk spurt ends at frame $lastSentIndex")
+                }
+            }
             if (index % probeEvery == 0L) {
                 send(PacketKind.PROBE, 0, ByteBuffer.allocate(8).putLong(System.nanoTime()).array())
             }
@@ -231,6 +277,7 @@ class MediaSession(
                 PacketKind.AUDIO -> onAudio(opened, now)
                 PacketKind.PROBE -> if (opened.payload.size == 8) pendingReplies.add(opened.payload)
                 PacketKind.PROBE_REPLY -> if (opened.payload.size == 8) onProbeReply(ByteBuffer.wrap(opened.payload).long, now)
+                PacketKind.TALK_END -> if (opened.payload.size == 8) onTalkEnd(ByteBuffer.wrap(opened.payload).long)
             }
         }
     }
@@ -238,18 +285,45 @@ class MediaSession(
     private fun onAudio(p: OpenedPacket, now: Long) {
         val index = (p.header.timestamp.toLong() and 0xFFFF_FFFFL) / samplesPerFrame
         synchronized(lock) {
+            if (pushToTalk && index > endedSpurtIndex && (firstIndex < 0 || index > highestIndex + SPURT_GAP_FRAMES)) {
+                closeSpurt() // a TALK_END may have been lost
+                spurts++
+            }
             when (buffer.push(index, p.payload, now)) {
-                PushResult.ACCEPTED -> {
+                PushResult.ACCEPTED -> if (index > endedSpurtIndex) {
                     audioReceived++
                     if (firstIndex < 0 || index < firstIndex) firstIndex = index
                     if (index > highestIndex) highestIndex = index
                 }
                 PushResult.LATE -> {
-                    audioReceived++
+                    if (index > endedSpurtIndex) audioReceived++
                     late.incrementAndGet()
                 }
                 PushResult.DUPLICATE -> duplicates.incrementAndGet()
             }
+        }
+    }
+
+    /** Last frame of the most recent spurt the peer announced as ended (push-to-talk). */
+    private var endedSpurtIndex = -1L
+
+    /** Called with [lock] held: closes the loss count of the current spurt. */
+    private fun closeSpurt() {
+        if (firstIndex >= 0) lostInEndedSpurts += (highestIndex - firstIndex + 1 - audioReceived).coerceAtLeast(0)
+        firstIndex = -1
+        highestIndex = -1
+        audioReceived = 0
+    }
+
+    private fun onTalkEnd(lastIndex: Long) {
+        if (!pushToTalk) return
+        synchronized(lock) {
+            if (lastIndex <= endedSpurtIndex) return // repeated or stale marker
+            endedSpurtIndex = lastIndex
+            buffer.endSpurt(lastIndex)
+            // Frames lost at the end of the spurt count as lost too.
+            if (firstIndex >= 0 && lastIndex >= highestIndex) highestIndex = lastIndex
+            closeSpurt()
         }
     }
 
@@ -281,6 +355,7 @@ class MediaSession(
                 Playout.Buffering -> silence
                 is Playout.Frame -> {
                     played.incrementAndGet()
+                    lastPeerFrameNanos = System.nanoTime()
                     concealer.good(out.payload)
                     verify?.let { if (out.payload.contentEquals(it.frame(out.index))) intact.incrementAndGet() else corrupted.incrementAndGet() }
                     out.payload
@@ -301,6 +376,10 @@ class MediaSession(
     }
 
     companion object {
+        /** In push-to-talk, a jump of more than this many frames starts a new spurt (TALK_END lost). */
+        private const val SPURT_GAP_FRAMES = 50
+        private const val PEER_TALKING_NANOS = 150_000_000L
+
         fun describe(s: MediaStats): String = String.format(
             java.util.Locale.US,
             "%d s, sent %d, received %d, lost %d (%.2f%%), late %d, dup %d, auth-fail %d, wrong-source %d, played %d (intact %d, corrupted %d), concealed %d, dropped %d, buffer %.0f/%.0f ms, jitter %.1f ms, spread %.0f ms, rtt avg %s min %s max %s ms, speaker %s ms, est. one-way %s ms",

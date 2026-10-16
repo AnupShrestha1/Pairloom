@@ -10,6 +10,9 @@ enum class PacketKind(val code: Int) {
     /** A round-trip probe; the peer echoes its payload back as [PROBE_REPLY]. */
     PROBE(1),
     PROBE_REPLY(2),
+
+    /** Push-to-talk: the talk spurt ended; the payload is the index of its last frame (8 bytes). */
+    TALK_END(3),
     ;
 
     companion object {

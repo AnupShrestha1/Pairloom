@@ -73,6 +73,8 @@ class MainActivity : ComponentActivity() {
             onDeclineCall = viewModel::declineCall,
             onToggleMute = viewModel::toggleMute,
             onToggleSpeaker = viewModel::toggleSpeaker,
+            onPushToTalk = { withMicrophone(viewModel::startPushToTalk) },
+            onTalk = viewModel::setTalking,
         )
         setContent {
             PairloomTheme {

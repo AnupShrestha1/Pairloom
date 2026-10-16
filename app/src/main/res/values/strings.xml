@@ -94,6 +94,16 @@
     <string name="call_active">In call with %1$s</string>
     <string name="call_calling">Calling %1$s…</string>
     <string name="call_quality">Audio replaced or lost: %1$s%% · estimated delay %2$s ms plus audio hardware</string>
+    <string name="btn_push_to_talk">Push-to-talk</string>
+    <string name="btn_end_ptt">End push-to-talk</string>
+    <string name="ptt_incoming">%1$s wants to start push-to-talk</string>
+    <string name="ptt_active">Push-to-talk with %1$s</string>
+    <string name="ptt_hold">Hold to talk</string>
+    <string name="ptt_release">Talking… release to listen</string>
+    <string name="ptt_you_talking">You are talking</string>
+    <string name="ptt_peer_talking">%1$s is talking</string>
+    <string name="ptt_both_talking">You and %1$s are both talking</string>
+    <string name="ptt_quiet">Nobody is talking</string>
     <string name="call_mic_denied">Pairloom needs the microphone for calls. Allow it when asked, or in app settings.</string>
 
     <!-- Media (milestone A1 test tone) -->

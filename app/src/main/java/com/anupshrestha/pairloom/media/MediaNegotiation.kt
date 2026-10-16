@@ -15,7 +15,13 @@ enum class MediaKind(val code: Int) {
 
     /** A voice call; the receiving user must accept it. */
     VOICE(1),
+
+    /** Push-to-talk (walkie-talkie); the receiving user must accept it, as it opens the microphone. */
+    PTT(2),
     ;
+
+    /** Uses the microphone, so the receiving user must accept. */
+    val needsAccept: Boolean get() = this != TONE
 
     companion object {
         fun fromCode(code: Int): MediaKind? = entries.firstOrNull { it.code == code }
@@ -146,9 +152,9 @@ class MediaNegotiation(
             session = null
             kind = null
         }
-        if (offeredKind == MediaKind.VOICE) {
+        if (offeredKind.needsAccept) {
             incoming = m
-            log("Media: incoming call; waiting for the user")
+            log("Media: incoming $offeredKind; waiting for the user")
         } else {
             answer(m)
         }

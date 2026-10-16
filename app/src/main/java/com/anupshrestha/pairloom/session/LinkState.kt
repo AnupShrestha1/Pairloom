@@ -130,8 +130,9 @@ data class LinkDetails(
     val mediaOffering: Boolean = false,
     /** What the running session carries (tone or voice), if one runs. */
     val mediaKind: com.anupshrestha.pairloom.media.MediaKind? = null,
-    /** The other phone is calling and waits for the user. */
+    /** The other phone is calling (voice or push-to-talk) and waits for the user. */
     val incomingCall: Boolean = false,
+    val incomingKind: com.anupshrestha.pairloom.media.MediaKind? = null,
     val muted: Boolean = false,
     val speakerOn: Boolean = false,
 )

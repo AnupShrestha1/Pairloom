@@ -30,6 +30,10 @@ enum class PushResult { ACCEPTED, LATE, DUPLICATE }
  * frame periods, so latency comes down gradually instead of throwing whole bursts away. After
  * [rebufferAfterMissing] consecutive missing frames with an empty buffer, playout stops and
  * buffers again.
+ *
+ * Push-to-talk sends talk spurts with silence between them. [endSpurt] marks the last frame of a
+ * spurt: playout stops cleanly after it (no frames concealed for the silence), and a spurt shorter
+ * than the target depth is still played.
  */
 class JitterBuffer(
     private val frameNanos: Long,
@@ -52,6 +56,7 @@ class JitterBuffer(
     private var lastArrival: Pair<Long, Long>? = null // (index, arrival nanos)
     private val transits = ArrayDeque<Long>()
     private var sinceTrim = Int.MAX_VALUE
+    private var spurtEnd: Long? = null
 
     /** [spreadPercentile] minus smallest transit time over the recent window, in nanoseconds. */
     var spreadNanos = 0L
@@ -74,7 +79,7 @@ class JitterBuffer(
         }
 
     fun push(index: Long, payload: ByteArray, arrivalNanos: Long): PushResult {
-        if (playing && index < nextIndex) return PushResult.LATE
+        if (index < nextIndex) return PushResult.LATE // also after a spurt ended or a rebuffer
         if (frames.containsKey(index)) return PushResult.DUPLICATE
         lastArrival?.let { (prevIndex, prevArrival) ->
             if (index > prevIndex) {
@@ -92,17 +97,44 @@ class JitterBuffer(
         return PushResult.ACCEPTED
     }
 
+    /** The sender says [lastIndex] is the last frame of a talk spurt (may arrive more than once). */
+    fun endSpurt(lastIndex: Long) {
+        if (spurtEnd?.let { it >= lastIndex } == true) return
+        if (playing) {
+            if (lastIndex >= nextIndex) {
+                spurtEnd = lastIndex
+            } else if (frames.isEmpty()) {
+                playing = false // already played past it (concealing the silence): stop now
+            }
+        } else if (frames.isNotEmpty() && frames.firstKey() <= lastIndex) {
+            spurtEnd = lastIndex // a spurt still buffering; play it even if it is short
+        }
+    }
+
     /** Called once per frame period by playout. */
     fun pop(): Playout {
+        spurtEnd?.let { end ->
+            if (playing && nextIndex > end) {
+                // The spurt has been played; wait for the next one.
+                playing = false
+                spurtEnd = null
+                while (frames.isNotEmpty() && frames.firstKey() <= end) frames.remove(frames.firstKey())
+            }
+        }
         if (!playing) {
-            if (frames.size < targetFrames) return Playout.Buffering
+            if (frames.isEmpty()) return Playout.Buffering
+            val end = spurtEnd
+            if (end != null && frames.firstKey() > end) spurtEnd = null // stale marker
+            val shortSpurtDone = spurtEnd != null
+            if (frames.size < targetFrames && !shortSpurtDone) return Playout.Buffering
             playing = true
             nextIndex = frames.firstKey()
             consecutiveMissing = 0
         }
-        // Persistently over target: drop one old frame now and then to bring latency down.
+        // Persistently over target: drop one old frame now and then to bring latency down. Not
+        // once the spurt's end is known: the rest of it is played whole, then playout pauses anyway.
         if (sinceTrim < Int.MAX_VALUE) sinceTrim++
-        if (frames.size > targetFrames + 2 && sinceTrim >= trimEvery) {
+        if (frames.size > targetFrames + 2 && sinceTrim >= trimEvery && spurtEnd == null) {
             val first = frames.firstKey()
             frames.remove(first)
             dropped++

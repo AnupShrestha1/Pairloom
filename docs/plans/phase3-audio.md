@@ -195,6 +195,38 @@ saving causes the bursts; needs the A03s to discover, i.e. Location on); conceal
 late frames so the buffer percentile can drop (Opus in A4 has better concealment); a lower-latency
 push-to-talk buffer is not useful, as PTT tolerates delay.
 
+## A3 results: push-to-talk (2026-10-16)
+Design as built:
+- A third media kind, `PTT`. Like a call, the other phone's user must accept it, because it opens
+  their microphone.
+- Both phones open the microphone and speaker once; push-to-talk starts on the speaker. Each phone
+  has a large "Hold to talk" button, and both may talk at once (no floor control).
+- The microphone is read all the time, so its clock and echo canceller keep running. Audio is sent
+  only while the button is held, plus a 150 ms hangover so the last word is not clipped.
+- A `TALK_END` media packet (sent three times) gives the index of the spurt's last frame. The
+  receiver's jitter buffer then plays the spurt to its end and pauses. It conceals no silence, does
+  not trim a finished spurt, and still plays a spurt shorter than the buffer target. Stragglers from
+  an ended spurt are rejected as late.
+- Loss is counted per spurt. A jump of more than 50 frames also starts a new spurt, in case every
+  `TALK_END` was lost.
+- Probes run between spurts, so the round trip stays measured.
+- The listener shows "<name> is talking" while the other phone's voice is being played (100 ms UI
+  poll during push-to-talk).
+
+Device test, Redmi starting, A03s accepting, home router off, 37 s, 4 s holds on each phone:
+
+| | Redmi (listening to the A03s) | A03s (listening to the Redmi) |
+|---|---|---|
+| Talking indicator while the other holds | "SM-A037F is talking" | "23117RA68G is talking" |
+| After release | "Nobody is talking" | "Nobody is talking" |
+| Loss / concealed | 0.8 % / 33 frames | 0.23 % / 10 frames |
+| Round trip avg / min / max | 87 / 6 / 705 ms | 80 / 5 / 622 ms |
+| Estimated one-way | 213 ms | 210 ms |
+
+No crashes. A second run had extra spurts from someone pressing the A03s by hand; the input log
+shows real touchscreen events, so they were not spurious. Talk-button presses and releases are now
+logged.
+
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece
   default for full duplex, PTT for speaker use.

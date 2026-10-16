@@ -2,6 +2,9 @@ package com.anupshrestha.pairloom.ui
 
 import android.net.wifi.p2p.WifiP2pDevice
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,13 +19,24 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.anupshrestha.pairloom.R
+import com.anupshrestha.pairloom.media.MediaKind
 import com.anupshrestha.pairloom.session.DisconnectReason
 import com.anupshrestha.pairloom.session.FailureKind
 import com.anupshrestha.pairloom.session.LinkDetails
@@ -50,6 +64,9 @@ class ConnectionActions(
     val onDeclineCall: () -> Unit,
     val onToggleMute: () -> Unit,
     val onToggleSpeaker: () -> Unit,
+    val onPushToTalk: () -> Unit,
+    /** The talk button was pressed (true) or released (false). */
+    val onTalk: (Boolean) -> Unit,
 )
 
 @Composable
@@ -302,13 +319,15 @@ private fun LinkedCard(details: LinkDetails) {
 
 @Composable
 private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: ConnectionActions) {
-    val inCall = details.mediaActive && details.mediaKind == com.anupshrestha.pairloom.media.MediaKind.VOICE
+    val inCall = details.mediaActive && details.mediaKind == MediaKind.VOICE
+    val inPtt = details.mediaActive && details.mediaKind == MediaKind.PTT
     val busy = details.mediaActive || details.mediaOffering
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             when {
                 details.incomingCall -> {
-                    Text(text = stringResource(R.string.call_incoming, details.peerName), style = MaterialTheme.typography.titleLarge)
+                    val prompt = if (details.incomingKind == MediaKind.PTT) R.string.ptt_incoming else R.string.call_incoming
+                    Text(text = stringResource(prompt, details.peerName), style = MaterialTheme.typography.titleLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = actions.onAcceptCall) { Text(stringResource(R.string.btn_accept_call)) }
                         OutlinedButton(onClick = actions.onDeclineCall) { Text(stringResource(R.string.btn_decline_call)) }
@@ -336,12 +355,16 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
                         )
                     }
                 }
+                inPtt -> PushToTalkPanel(details, actions)
                 details.mediaOffering -> {
                     Text(text = stringResource(R.string.call_calling, details.peerName), style = MaterialTheme.typography.titleMedium)
                     OutlinedButton(onClick = actions.onStopMedia) { Text(stringResource(R.string.btn_cancel)) }
                 }
                 else -> {
-                    Button(onClick = actions.onCall, enabled = !busy) { Text(stringResource(R.string.btn_call)) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = actions.onCall, enabled = !busy) { Text(stringResource(R.string.btn_call)) }
+                        OutlinedButton(onClick = actions.onPushToTalk, enabled = !busy) { Text(stringResource(R.string.btn_push_to_talk)) }
+                    }
                     if (micDenied) Text(text = stringResource(R.string.call_mic_denied), style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -349,9 +372,63 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
     }
 }
 
+/** Push-to-talk: hold the big button to talk; shows who is talking. */
+@Composable
+private fun PushToTalkPanel(details: LinkDetails, actions: ConnectionActions) {
+    val s = details.media
+    Text(text = stringResource(R.string.ptt_active, details.peerName), style = MaterialTheme.typography.titleLarge)
+    val status = when {
+        s?.talking == true && s.peerTalking -> stringResource(R.string.ptt_both_talking, details.peerName)
+        s?.talking == true -> stringResource(R.string.ptt_you_talking)
+        s?.peerTalking == true -> stringResource(R.string.ptt_peer_talking, details.peerName)
+        else -> stringResource(R.string.ptt_quiet)
+    }
+    Text(text = status, style = MaterialTheme.typography.titleMedium, color = if (s?.peerTalking == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+
+    var pressed by remember { mutableStateOf(false) }
+    val onTalk by rememberUpdatedState(actions.onTalk)
+    val label = stringResource(R.string.ptt_hold)
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = if (pressed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(140.dp)
+            .semantics { contentDescription = label }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        onTalk(true)
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            pressed = false
+                            onTalk(false)
+                        }
+                    },
+                )
+            },
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = stringResource(if (pressed) R.string.ptt_release else R.string.ptt_hold),
+                style = MaterialTheme.typography.headlineSmall,
+                color = if (pressed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = actions.onToggleSpeaker) {
+            Text(stringResource(if (details.speakerOn) R.string.btn_earpiece else R.string.btn_speaker))
+        }
+        Button(onClick = actions.onStopMedia) { Text(stringResource(R.string.btn_end_ptt)) }
+    }
+}
+
 @Composable
 private fun MediaCard(details: LinkDetails, actions: ConnectionActions) {
-    val toneActive = details.mediaActive && details.mediaKind == com.anupshrestha.pairloom.media.MediaKind.TONE
+    val toneActive = details.mediaActive && details.mediaKind == MediaKind.TONE
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(text = stringResource(R.string.media_title), style = MaterialTheme.typography.titleSmall)

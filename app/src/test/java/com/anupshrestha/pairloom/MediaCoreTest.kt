@@ -192,6 +192,51 @@ class MediaCoreTest {
         assertEquals(Playout.Buffering, jb.pop()) // stopped after 4 missing with an empty buffer
     }
 
+    // --- push-to-talk spurts ------------------------------------------------------------------
+
+    private fun drain(jb: JitterBuffer, periods: Int) = (1..periods).map { jb.pop() }
+
+    @Test
+    fun aSpurtEndStopsPlayoutWithoutConcealingTheSilence() {
+        val jb = JitterBuffer(10 * ms, minFrames = 3)
+        for (i in 0L..19L) jb.push(i, frame(i), i * 10 * ms)
+        jb.endSpurt(19)
+        val out = drain(jb, 40)
+        assertEquals(20, out.count { it is Playout.Frame })
+        assertEquals(0, out.count { it is Playout.Missing })
+        assertEquals(Playout.Buffering, out.last())
+        // The next spurt (the sender's frame index kept counting through the silence) plays again.
+        for (i in 300L..302L) jb.push(i, frame(i), i * 10 * ms)
+        assertEquals(300L, (jb.pop() as Playout.Frame).index)
+    }
+
+    @Test
+    fun aSpurtShorterThanTheTargetIsStillPlayed() {
+        val jb = JitterBuffer(10 * ms, minFrames = 5)
+        jb.push(0, frame(0), 0)
+        jb.push(1, frame(1), 10 * ms)
+        assertEquals(Playout.Buffering, jb.pop())
+        jb.endSpurt(1)
+        assertEquals(0L, (jb.pop() as Playout.Frame).index)
+        assertEquals(1L, (jb.pop() as Playout.Frame).index)
+        assertEquals(Playout.Buffering, jb.pop())
+    }
+
+    @Test
+    fun aMissingTailFrameIsConcealedAndStaleMarkersAreIgnored() {
+        val jb = JitterBuffer(10 * ms, minFrames = 3)
+        for (i in 0L..8L) jb.push(i, frame(i), i * 10 * ms) // frame 9 lost
+        jb.endSpurt(9)
+        val out = drain(jb, 12)
+        assertEquals(9, out.count { it is Playout.Frame })
+        assertEquals(listOf(Playout.Missing(9)), out.filterIsInstance<Playout.Missing>())
+        // A late copy of the marker, and a straggler of the ended spurt, change nothing.
+        jb.endSpurt(9)
+        assertEquals(PushResult.LATE, jb.push(5, frame(5), 200 * ms))
+        for (i in 100L..102L) jb.push(i, frame(i), i * 10 * ms)
+        assertEquals(listOf(100L, 101L, 102L), drain(jb, 3).map { (it as Playout.Frame).index })
+    }
+
     // --- concealment, PCM, tone -----------------------------------------------------------------
 
     @Test

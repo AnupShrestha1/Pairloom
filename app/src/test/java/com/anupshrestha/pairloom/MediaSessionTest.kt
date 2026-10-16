@@ -49,6 +49,36 @@ class MediaSessionTest {
     }
 
     @Test
+    fun pushToTalkSendsOnlyWhileTalkingAndCountsSpurts() {
+        val sa = socket(); val sb = socket()
+        val ka = DirectionKey.random(); val kb = DirectionKey.random()
+        val a = MediaSession(sa, InetSocketAddress(lo, sb.localPort), ka, kb, pushToTalk = true, hangoverFrames = 5)
+        val b = MediaSession(sb, InetSocketAddress(lo, sa.localPort), kb, ka, pushToTalk = true, hangoverFrames = 5)
+        a.start(); b.start()
+        Thread.sleep(300) // nobody talks: only probes
+        assertEquals(0L, b.stats().played)
+        a.talking = true
+        Thread.sleep(500)
+        assertTrue(a.stats().talking)
+        assertTrue("peer talking", b.stats().peerTalking)
+        a.talking = false
+        Thread.sleep(500)
+        assertTrue(!a.stats().talking && !b.stats().peerTalking)
+        a.talking = true
+        Thread.sleep(300)
+        a.talking = false
+        Thread.sleep(500)
+        val sa2 = a.stop(); val s = b.stop()
+        assertEquals(2L, s.spurts)
+        assertEquals(0L, sa2.played) // b never talked
+        assertTrue("played ${s.played}", s.played in 60L..110L) // ~80 talking + 2 x 5 hangover
+        assertEquals(s.played, s.intact)
+        assertTrue("concealed ${s.concealed}", s.concealed <= 3)
+        assertTrue("loss ${s.lossPercent}", s.lossPercent < 5.0)
+        assertNotNull(s.rttAvgMs) // probes keep running between spurts
+    }
+
+    @Test
     fun packetsFromOtherSourcesOrKeysAreRejected() {
         val sa = socket(); val peer = socket(); val stranger = socket()
         val ka = DirectionKey.random(); val kPeer = DirectionKey.random()
