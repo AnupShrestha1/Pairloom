@@ -22,9 +22,19 @@ import com.anupshrestha.pairloom.p2p.P2pEvent
 import com.anupshrestha.pairloom.p2p.P2pPermissions
 import com.anupshrestha.pairloom.p2p.P2pResult
 import com.anupshrestha.pairloom.p2p.WifiDirectController
+import com.anupshrestha.pairloom.security.DeviceIdentity
+import com.anupshrestha.pairloom.security.Fingerprints
+import com.anupshrestha.pairloom.security.Identity
+import com.anupshrestha.pairloom.security.InstallId
+import com.anupshrestha.pairloom.security.PairedDeviceStore
+import com.anupshrestha.pairloom.security.SecureHandshakeException
+import com.anupshrestha.pairloom.security.SecureTransport
+import com.anupshrestha.pairloom.security.toHex
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -35,6 +45,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import java.io.File
 import java.io.IOException
 import java.net.Inet4Address
 import java.net.InetSocketAddress
@@ -90,6 +101,39 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     /** Every socket the current session opened; closed as a whole by [teardown]. */
     @Volatile private var sockets = SocketRegistry()
 
+    /** This phone's identity, install ID and paired phones; loaded once off the main thread. */
+    private class Security(val identity: Identity, val installId: String, val store: PairedDeviceStore)
+
+    @Volatile private var security: Security? = null
+    private var securityError: String? = null
+
+    /** The pairing prompt waiting for the user's answer. Main thread only. */
+    private var pendingPairing: CompletableDeferred<Boolean>? = null
+
+    init {
+        viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = app.noBackupFilesDir
+                    Security(
+                        identity = DeviceIdentity.getOrCreate(),
+                        installId = InstallId.getOrCreate(File(dir, "install-id")),
+                        store = PairedDeviceStore(File(dir, "paired-devices")),
+                    )
+                }
+            }
+            loaded.onSuccess {
+                security = it
+                _ui.update { s -> s.copy(ownKey = Fingerprints.short(it.identity.fingerprintHex)) }
+                log("Identity ready: key ${Fingerprints.short(it.identity.fingerprintHex)}")
+                refreshPaired()
+            }.onFailure {
+                securityError = it.message ?: it.javaClass.simpleName
+                log("Identity unavailable: $securityError")
+            }
+        }
+    }
+
     // ---- Entry points called by the UI -------------------------------------------------------
 
     /** Starts a session in [role]. Ignored while a session is active or still cleaning up. */
@@ -97,6 +141,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val state = _ui.value
         if (state.link.isActive || state.cleaningUp) {
             log("Ignored start request: a session is already active or being cleaned up")
+            return
+        }
+        if (security == null) {
+            setLink(LinkState.Failed(FailureKind.IDENTITY_UNAVAILABLE, securityError ?: "the identity is still loading"))
             return
         }
         if (P2pPermissions.missing(app).isNotEmpty()) {
@@ -239,6 +287,44 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         teardown(finalState = null, sendBye = false)
+    }
+
+    /** The user's answer to the pairing prompt: true if both phones show the same code. */
+    fun answerPairing(codesMatch: Boolean) {
+        val pending = pendingPairing ?: return
+        pendingPairing = null
+        log(if (codesMatch) "You confirmed the codes match" else "You said the codes do not match")
+        pending.complete(codesMatch)
+    }
+
+    /** Removes a paired phone. Only allowed while no session is running. */
+    fun forgetDevice(fingerprintHex: String) {
+        val sec = security ?: return
+        if (_ui.value.link.isActive) {
+            log("Ignored forget request: a session is active")
+            return
+        }
+        viewModelScope.launch {
+            val removed = withContext(Dispatchers.IO) { runCatching { sec.store.remove(fingerprintHex) } }
+            removed.onSuccess { if (it) log("Forgot the phone with key ${Fingerprints.short(fingerprintHex)}") }
+                .onFailure { log("Could not forget the phone: ${it.message}") }
+            refreshPaired()
+        }
+    }
+
+    private fun refreshPaired() {
+        val sec = security ?: return
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) { runCatching { sec.store.load() } }
+            list.onSuccess { devices ->
+                _ui.update { s ->
+                    s.copy(
+                        pairedDevices = devices.sortedByDescending { it.pairedAtMs }
+                            .map { PairedDeviceUi(it.name, it.fingerprintHex, Fingerprints.short(it.fingerprintHex), it.pairedAtMs) },
+                    )
+                }
+            }.onFailure { log("Paired phones unreadable: ${it.message}") }
+        }
     }
 
     // ---- Session start -----------------------------------------------------------------------
@@ -479,24 +565,25 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             var ch: ControlChannel? = null
             var handedOver = false
             try {
-                val endpoint = LinkEndpoint.resolve(interfaceName)
-                    ?: throw LinkUnverifiedException("$interfaceName has no IPv4 address")
+                val endpoint = awaitEndpoint(interfaceName)
+                    ?: throw LinkUnverifiedException("$interfaceName has no IPv4 address after ${ADDRESS_WAIT_MS / 1000} s")
                 LinkEndpoint.checkEndpoint(endpoint)?.let { throw LinkUnverifiedException(it) }
                 log("Wi-Fi Direct endpoint: $endpoint")
-                val (opened, peerName) = if (isGroupOwner) {
+                val established = if (isGroupOwner) {
                     LinkEndpoint.checkHostAddress(endpoint, ownerAddress)?.let { throw LinkUnverifiedException(it) }
-                    acceptPeer(endpoint, registry)
+                    acceptPeer(endpoint, registry, gen)
                 } else {
                     val target = LinkEndpoint.parseIpv4(ownerAddress)
                         ?: throw LinkUnverifiedException("the group owner address is unknown")
                     LinkEndpoint.checkPeer(endpoint, target)?.let { throw LinkUnverifiedException("group owner $it") }
-                    connectToOwner(endpoint, target, registry)
+                    connectToOwner(endpoint, target, registry, gen)
                 }
+                val opened = established.channel
                 ch = opened
                 withContext(Dispatchers.Main) {
                     // Only a still-current session may adopt the channel; otherwise finally closes it.
                     if (gen == generation) {
-                        onLinked(opened, peerName, isGroupOwner, ownerAddress)
+                        onLinked(established, isGroupOwner, ownerAddress)
                         handedOver = true
                     }
                 }
@@ -505,6 +592,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) { if (gen == generation) onChannelEnded(exit) }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: SecurityFailure) {
+                withContext(Dispatchers.Main) { if (gen == generation) fail(e.kind, e.message) }
             } catch (e: LinkUnverifiedException) {
                 withContext(Dispatchers.Main) { if (gen == generation) fail(FailureKind.LINK_UNVERIFIED, e.message) }
             } catch (e: ControlProtocol.VersionMismatchException) {
@@ -522,9 +611,11 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Group owner side: listen on the Wi-Fi Direct address only, and accept the first connection
-     * that comes from inside the group's subnet and completes a valid handshake.
+     * that comes from inside the group's subnet and completes mutual TLS. A connection whose TLS
+     * handshake fails is dropped and listening continues; any later security failure ends the
+     * session.
      */
-    private suspend fun acceptPeer(endpoint: P2pEndpoint, registry: SocketRegistry): Pair<ControlChannel, String> {
+    private suspend fun acceptPeer(endpoint: P2pEndpoint, registry: SocketRegistry, gen: Int): Established {
         val server = ServerSocket()
         if (!registry.register(server)) throw IOException("the session ended")
         try {
@@ -553,22 +644,21 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                     continue
                 }
                 log("Incoming connection from ${remote?.hostAddress}")
-                val ch = try {
-                    prepare(socket)
-                } catch (e: IOException) {
-                    log("Could not set up the connection from ${remote?.hostAddress}: ${e.message}")
-                    discard(socket, registry)
-                    continue
-                }
                 try {
-                    val peerName = ch.handshake(HANDSHAKE_TIMEOUT_MS)
-                    return ch to peerName
+                    return secure(socket, isServer = true, registry = registry, gen = gen)
+                } catch (e: SecurityFailure) {
+                    discard(socket, registry)
+                    if (e.kind != FailureKind.SECURE_HANDSHAKE_FAILED) throw e
+                    log("Rejected connection from ${remote?.hostAddress}: ${e.message}")
                 } catch (e: ControlProtocol.VersionMismatchException) {
-                    discard(ch, registry)
+                    discard(socket, registry)
+                    throw e
+                } catch (e: CancellationException) {
+                    discard(socket, registry)
                     throw e
                 } catch (e: IOException) {
-                    log("Rejected connection: ${e.message}")
-                    discard(ch, registry)
+                    log("Rejected connection from ${remote?.hostAddress}: ${e.message}")
+                    discard(socket, registry)
                 }
             }
         } finally {
@@ -578,13 +668,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Client side: connect from this phone's Wi-Fi Direct address to the group owner, retrying
-     * while the owner brings its listener up. Both ends are checked before the handshake.
+     * while the owner brings its listener up. Both ends are checked before TLS. Only the TCP
+     * connect is retried; a TLS or session failure ends the attempt.
      */
     private suspend fun connectToOwner(
         endpoint: P2pEndpoint,
         target: Inet4Address,
         registry: SocketRegistry,
-    ): Pair<ControlChannel, String> {
+        gen: Int,
+    ): Established {
         var lastError: IOException? = null
         repeat(CONNECT_ATTEMPTS) { attempt ->
             currentCoroutineContext().ensureActive()
@@ -595,18 +687,6 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 socket.connect(InetSocketAddress(target, PORT), CONNECT_TIMEOUT_SOCKET_MS)
                 LinkEndpoint.checkConnected(endpoint, socket.localAddress, socket.inetAddress, target)
                     ?.let { throw LinkUnverifiedException(it) }
-                log("TCP connected to ${target.hostAddress}:$PORT from ${socket.localAddress?.hostAddress} (${endpoint.interfaceName})")
-                val ch = prepare(socket)
-                val peerName = try {
-                    ch.handshake(HANDSHAKE_TIMEOUT_MS)
-                } catch (e: IOException) {
-                    discard(ch, registry)
-                    throw e
-                }
-                return ch to peerName
-            } catch (e: ControlProtocol.VersionMismatchException) {
-                discard(socket, registry)
-                throw e
             } catch (e: LinkUnverifiedException) {
                 discard(socket, registry)
                 throw e
@@ -615,9 +695,86 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 log("Connect attempt ${attempt + 1}/$CONNECT_ATTEMPTS failed: ${e.message}")
                 discard(socket, registry)
                 delay(CONNECT_RETRY_DELAY_MS)
+                return@repeat
+            }
+            log("TCP connected to ${target.hostAddress}:$PORT from ${socket.localAddress?.hostAddress} (${endpoint.interfaceName})")
+            try {
+                return secure(socket, isServer = false, registry = registry, gen = gen)
+            } catch (e: Throwable) {
+                discard(socket, registry)
+                throw e
             }
         }
         throw IOException("could not reach ${target.hostAddress}:$PORT (${lastError?.message})")
+    }
+
+    /**
+     * Android can report the group as formed before the interface has its IPv4 address (seen on
+     * the Redmi: group formed 110 ms after the request, address not yet assigned). Wait briefly
+     * for it; if it never appears the caller still fails closed.
+     */
+    private suspend fun awaitEndpoint(interfaceName: String): P2pEndpoint? {
+        val deadline = SystemClock.elapsedRealtime() + ADDRESS_WAIT_MS
+        while (true) {
+            LinkEndpoint.resolve(interfaceName)?.let { return it }
+            if (SystemClock.elapsedRealtime() >= deadline) return null
+            delay(ADDRESS_POLL_MS)
+        }
+    }
+
+    /** A connection that passed mutual TLS and session negotiation. */
+    private class Established(val channel: ControlChannel, val peer: SessionPeer, val protocol: String, val cipherSuite: String)
+
+    /** Mutual TLS, then HELLO / STATUS and, if needed, pairing. */
+    private suspend fun secure(socket: Socket, isServer: Boolean, registry: SocketRegistry, gen: Int): Established {
+        val sec = security ?: throw SecurityFailure(FailureKind.IDENTITY_UNAVAILABLE, securityError ?: "identity not loaded")
+        socket.tcpNoDelay = true
+        socket.keepAlive = true
+        val tls = try {
+            SecureTransport.establish(socket, isServer, sec.identity, HANDSHAKE_TIMEOUT_MS)
+        } catch (e: SecureHandshakeException) {
+            throw SecurityFailure(FailureKind.SECURE_HANDSHAKE_FAILED, e.message ?: "TLS handshake failed", e)
+        }
+        if (!registry.register(tls.socket)) throw IOException("the session ended")
+        log("TLS ${tls.protocol} ${tls.cipherSuite}; peer key ${Fingerprints.short(tls.peerFingerprint.toHex())}")
+        val ch = ControlChannel(tls.socket) { log(it) }
+        try {
+            val negotiator = SessionNegotiator(sec.identity.fingerprint, sec.installId, Build.MODEL, sec.store, { log(it) })
+            val peer = negotiator.negotiate(ch, isServer, tls.peerFingerprint, PromptFor(gen))
+            return Established(ch, peer, tls.protocol, tls.cipherSuite)
+        } catch (e: Throwable) {
+            ch.close(sendBye = false)
+            throw e
+        }
+    }
+
+    /** Shows the pairing code through [LinkState.Pairing] and waits for [answerPairing]. */
+    private inner class PromptFor(private val gen: Int) : PairingPrompt {
+        override suspend fun confirm(peerName: String, code: String): Boolean {
+            val answer = CompletableDeferred<Boolean>()
+            val shown = withContext(Dispatchers.Main) {
+                if (gen != generation) return@withContext false
+                pendingPairing?.cancel()
+                pendingPairing = answer
+                timeoutJob?.cancel()
+                log("Pairing code $code; compare it with the other phone")
+                setLink(LinkState.Pairing(peerName, code, waitingForPeer = false))
+                true
+            }
+            if (!shown) return false
+            return try {
+                answer.await()
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { if (pendingPairing === answer) pendingPairing = null }
+            }
+        }
+
+        override suspend fun waitingForPeer() {
+            withContext(Dispatchers.Main) {
+                val state = _ui.value.link
+                if (gen == generation && state is LinkState.Pairing) setLink(state.copy(waitingForPeer = true))
+            }
+        }
     }
 
     private fun discard(resource: Closeable, registry: SocketRegistry) {
@@ -625,13 +782,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         registry.release(resource)
     }
 
-    private fun prepare(socket: Socket): ControlChannel {
-        socket.tcpNoDelay = true
-        socket.keepAlive = true
-        return ControlChannel(socket, Build.MODEL) { log(it) }
-    }
-
-    private fun onLinked(ch: ControlChannel, peerName: String, isGroupOwner: Boolean, ownerAddress: String?) {
+    private fun onLinked(established: Established, isGroupOwner: Boolean, ownerAddress: String?) {
+        val ch = established.channel
+        val peerName = established.peer.name
         channel = ch
         linkedAtMs = SystemClock.elapsedRealtime()
         timeoutJob?.cancel()
@@ -642,10 +795,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             groupFormedMs = groupFormedAtMs - requestedAtMs,
             socketMs = linkedAtMs - groupFormedAtMs,
             viaFallback = fallbackUsed,
+            tlsProtocol = established.protocol,
+            cipherSuite = established.cipherSuite,
+            peerKey = Fingerprints.short(established.peer.fingerprintHex),
+            newlyPaired = established.peer.newlyPaired,
         )
-        log("Linked with $peerName; group formed after ${details.groupFormedMs} ms, TCP handshake ${details.socketMs} ms later${if (details.viaFallback) " (via fallback)" else ""}")
+        log("Linked securely with $peerName (${details.tlsProtocol}, ${if (details.newlyPaired) "newly paired" else "paired earlier"}); group formed after ${details.groupFormedMs} ms, secure link ${details.socketMs} ms later${if (details.viaFallback) " (via fallback)" else ""}")
         logStaState("linked")
         setLink(LinkState.Linked(details))
+        if (details.newlyPaired) refreshPaired()
     }
 
     private fun onStats(stats: PingStats, gen: Int) {
@@ -700,6 +858,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         groupPollJob?.cancel()
         socketJob?.cancel()
         socketJob = null
+        pendingPairing?.cancel()
+        pendingPairing = null
 
         val ch = channel
         val registry = sockets
@@ -788,5 +948,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val CONNECT_TIMEOUT_SOCKET_MS = 2_000
         const val CONNECT_ATTEMPTS = 10
         const val CONNECT_RETRY_DELAY_MS = 500L
+        const val ADDRESS_WAIT_MS = 5_000L
+        const val ADDRESS_POLL_MS = 100L
     }
 }

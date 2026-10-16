@@ -13,6 +13,9 @@ import java.io.EOFException
 import java.io.InputStream
 
 class ControlProtocolTest {
+    private val ID = "00112233445566778899aabbccddeeff"
+    private val value32 = "ab".repeat(32)
+
     private fun roundTrip(message: Message): Message =
         ControlProtocol.read(ByteArrayInputStream(ControlProtocol.encode(message)))
 
@@ -40,7 +43,7 @@ class ControlProtocolTest {
 
     @Test
     fun helloRoundTrips() {
-        val message = Message.Hello(ControlProtocol.VERSION, "Redmi Note 13 Pro")
+        val message = Message.Hello(ControlProtocol.VERSION, ID, "Redmi Note 13 Pro")
         assertEquals(message, roundTrip(message))
     }
 
@@ -53,7 +56,7 @@ class ControlProtocolTest {
 
     @Test
     fun nonAsciiDeviceNameRoundTrips() {
-        val message = Message.Hello(1, "Téléphone 電話")
+        val message = Message.Hello(ControlProtocol.VERSION, ID, "Téléphone 電話")
         assertEquals(message, roundTrip(message))
     }
 
@@ -113,7 +116,7 @@ class ControlProtocolTest {
 
     @Test
     fun badMagicIsRejected() {
-        val bytes = ControlProtocol.encode(Message.Hello(1, "x"))
+        val bytes = ControlProtocol.encode(Message.Hello(ControlProtocol.VERSION, ID, "x"))
         bytes[5] = 'X'.code.toByte() // first magic byte: 4 length bytes + 1 type byte
         assertThrows(ControlProtocol.ProtocolException::class.java) {
             ControlProtocol.read(ByteArrayInputStream(bytes))
@@ -136,11 +139,61 @@ class ControlProtocolTest {
 
     @Test
     fun helloWithInconsistentNameLengthIsRejected() {
-        // type=1, "PLM1", version=1, nameLength=5 but only 2 name bytes follow
-        val body = intArrayOf(1, 'P'.code, 'L'.code, 'M'.code, '1'.code, 1, 5, 'a'.code, 'b'.code)
+        // type=1, "PLM1", version=2, 16-byte install ID, nameLength=5 but only 2 name bytes follow
+        val body = intArrayOf(1, 'P'.code, 'L'.code, 'M'.code, '1'.code, ControlProtocol.VERSION) +
+            IntArray(16) { it } + intArrayOf(5, 'a'.code, 'b'.code)
         assertThrows(ControlProtocol.ProtocolException::class.java) {
             ControlProtocol.read(ByteArrayInputStream(frame(*body)))
         }
+    }
+
+    @Test
+    fun versionOneHelloIsReportedAsAVersionMismatch() {
+        // Phase 1 layout: type=1, "PLM1", version=1, nameLength=1, 'x'
+        val body = intArrayOf(1, 'P'.code, 'L'.code, 'M'.code, '1'.code, 1, 1, 'x'.code)
+        val e = assertThrows(ControlProtocol.VersionMismatchException::class.java) {
+            ControlProtocol.read(ByteArrayInputStream(frame(*body)))
+        }
+        assertEquals(1, e.peerVersion)
+    }
+
+    @Test
+    fun installIdRoundTrips() {
+        val decoded = roundTrip(Message.Hello(ControlProtocol.VERSION, ID.uppercase(), "x")) as Message.Hello
+        assertEquals(ID, decoded.installIdHex)
+    }
+
+    @Test
+    fun sessionAndPairingMessagesRoundTrip() {
+        for (m in listOf(
+            Message.Status(1), Message.Status(3),
+            Message.Commit(value32), Message.Nonce("cd".repeat(32)), Message.Reveal("ef".repeat(32)),
+            Message.Confirm(true), Message.Confirm(false),
+        )) {
+            assertEquals(m, roundTrip(m))
+        }
+    }
+
+    @Test
+    fun malformedSessionMessagesAreRejected() {
+        val bad = listOf(
+            frame(5),                       // STATUS without payload
+            frame(5, 1, 2),                 // STATUS with two bytes
+            frame(6, *IntArray(31)),        // COMMIT one byte short
+            frame(7, *IntArray(33)),        // NONCE one byte long
+            frame(8),                       // REVEAL empty
+            frame(9, 2),                    // CONFIRM must be 0 or 1
+            frame(9),                       // CONFIRM empty
+        )
+        for (bytes in bad) {
+            assertThrows(ControlProtocol.ProtocolException::class.java) { ControlProtocol.read(ByteArrayInputStream(bytes)) }
+        }
+    }
+
+    @Test
+    fun encodingRejectsWrongSizedValues() {
+        assertThrows(IllegalArgumentException::class.java) { ControlProtocol.encode(Message.Commit("ab")) }
+        assertThrows(IllegalArgumentException::class.java) { ControlProtocol.encode(Message.Hello(ControlProtocol.VERSION, "zz", "x")) }
     }
 
     @Test
@@ -157,7 +210,7 @@ class ControlProtocolTest {
     @Test
     fun longDeviceNameIsTruncatedOnEncodeWithoutBreakingCharacters() {
         val name = "é".repeat(100) // 2 bytes each, 200 bytes in total
-        val decoded = roundTrip(Message.Hello(1, name)) as Message.Hello
+        val decoded = roundTrip(Message.Hello(ControlProtocol.VERSION, ID, name)) as Message.Hello
         assertTrue(decoded.deviceName.toByteArray(Charsets.UTF_8).size <= ControlProtocol.MAX_NAME_BYTES)
         assertTrue(decoded.deviceName.isNotEmpty())
         assertTrue(decoded.deviceName.all { it == 'é' })
@@ -165,7 +218,7 @@ class ControlProtocolTest {
 
     @Test
     fun encodedFramesStayWithinTheFrameLimit() {
-        val longest = ControlProtocol.encode(Message.Hello(1, "a".repeat(500)))
+        val longest = ControlProtocol.encode(Message.Hello(ControlProtocol.VERSION, ID, "a".repeat(500)))
         assertTrue(longest.size - 4 <= ControlProtocol.MAX_FRAME_BODY)
     }
 }

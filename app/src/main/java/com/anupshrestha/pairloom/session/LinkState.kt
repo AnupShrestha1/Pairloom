@@ -23,6 +23,27 @@ enum class FailureKind {
 
     /** The connection could not be proven to run over the Wi-Fi Direct link, so it was refused. */
     LINK_UNVERIFIED,
+
+    /** This phone's Keystore identity could not be created or failed its checks. */
+    IDENTITY_UNAVAILABLE,
+
+    /** The mutual TLS handshake failed. */
+    SECURE_HANDSHAKE_FAILED,
+
+    /** A paired phone's key or install ID changed (or the peer reports that ours did): hard stop. */
+    IDENTITY_CHANGED,
+
+    /** One of the users said the pairing codes do not match. */
+    PAIRING_REJECTED,
+
+    /** The pairing codes were not confirmed in time. */
+    PAIRING_TIMEOUT,
+
+    /** The pairing exchange itself failed, for example a broken commitment. */
+    PAIRING_FAILED,
+
+    /** The paired-device store could not be read or written; sessions are refused. */
+    TRUST_STORE_ERROR,
 }
 
 enum class DisconnectReason {
@@ -96,7 +117,17 @@ data class LinkDetails(
     val viaFallback: Boolean = false,
     val uptimeMs: Long = 0,
     val stats: PingStats = PingStats(),
+    /** Negotiated TLS protocol and cipher suite. */
+    val tlsProtocol: String = "",
+    val cipherSuite: String = "",
+    /** Short form of the peer's key fingerprint. */
+    val peerKey: String = "",
+    /** True if the phones were paired in this session. */
+    val newlyPaired: Boolean = false,
 )
+
+/** A paired phone as shown in the list. */
+data class PairedDeviceUi(val name: String, val fingerprintHex: String, val shortKey: String, val pairedAtMs: Long)
 
 sealed interface LinkState {
     data object Idle : LinkState
@@ -106,6 +137,9 @@ sealed interface LinkState {
     data class Discovering(val peers: List<PeerInfo>, val noneFoundHint: Boolean) : LinkState
     data class Connecting(val peerName: String) : LinkState
     data class OpeningSocket(val isGroupOwner: Boolean) : LinkState
+
+    /** Both phones show [code]; the user must say whether they match. */
+    data class Pairing(val peerName: String, val code: String, val waitingForPeer: Boolean) : LinkState
     data class Linked(val details: LinkDetails) : LinkState
     data class Disconnected(val reason: DisconnectReason, val detail: String?) : LinkState
     data class Failed(val kind: FailureKind, val detail: String?) : LinkState
@@ -117,6 +151,7 @@ val LinkState.isActive: Boolean
         this is LinkState.Discovering ||
         this is LinkState.Connecting ||
         this is LinkState.OpeningSocket ||
+        this is LinkState.Pairing ||
         this is LinkState.Linked
 
 data class LinkUiState(
@@ -129,6 +164,9 @@ data class LinkUiState(
     val cleaningUp: Boolean = false,
     val thisDeviceName: String? = null,
     val log: List<String> = emptyList(),
+    /** Short form of this phone's key fingerprint, once the identity is loaded. */
+    val ownKey: String? = null,
+    val pairedDevices: List<PairedDeviceUi> = emptyList(),
 )
 
 /**

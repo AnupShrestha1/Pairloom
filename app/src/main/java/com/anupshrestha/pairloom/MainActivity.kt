@@ -62,6 +62,8 @@ class MainActivity : ComponentActivity() {
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)),
                 )
             },
+            onPairingAnswer = viewModel::answerPairing,
+            onForget = viewModel::forgetDevice,
         )
         setContent {
             PairloomTheme {

@@ -41,6 +41,8 @@ class ConnectionActions(
     val onDisconnect: () -> Unit,
     val onOpenLocationSettings: () -> Unit,
     val onOpenAppSettings: () -> Unit,
+    val onPairingAnswer: (Boolean) -> Unit,
+    val onForget: (String) -> Unit,
 )
 
 @Composable
@@ -87,9 +89,12 @@ fun ConnectionScreen(
             }
 
             is LinkState.Discovering -> DiscoveryList(link, actions)
+            is LinkState.Pairing -> PairingCard(link, actions)
             is LinkState.Linked -> LinkedCard(link.details)
             else -> Unit
         }
+
+        if (!link.isActive && !ui.cleaningUp) PairedDevicesCard(ui, actions)
 
         if (ui.locationHint) {
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -157,6 +162,9 @@ private fun describe(link: LinkState): Pair<String, String> = when (link) {
     is LinkState.OpeningSocket ->
         stringResource(R.string.status_opening) to stringResource(R.string.opening_body)
 
+    is LinkState.Pairing ->
+        stringResource(R.string.status_pairing, link.peerName) to stringResource(R.string.pairing_body)
+
     is LinkState.Linked -> stringResource(R.string.status_linked) to
         stringResource(R.string.linked_peer, link.details.peerName)
 
@@ -185,6 +193,13 @@ private fun describe(link: LinkState): Pair<String, String> = when (link) {
                 FailureKind.GROUP_ROLE_MISMATCH -> R.string.failed_group_role_mismatch
                 FailureKind.LINK_UNVERIFIED -> R.string.failed_link_unverified
                 FailureKind.VERSION_MISMATCH -> R.string.failed_version_mismatch
+                FailureKind.IDENTITY_UNAVAILABLE -> R.string.failed_identity_unavailable
+                FailureKind.SECURE_HANDSHAKE_FAILED -> R.string.failed_secure_handshake
+                FailureKind.IDENTITY_CHANGED -> R.string.failed_identity_changed
+                FailureKind.PAIRING_REJECTED -> R.string.failed_pairing_rejected
+                FailureKind.PAIRING_TIMEOUT -> R.string.failed_pairing_timeout
+                FailureKind.PAIRING_FAILED -> R.string.failed_pairing_failed
+                FailureKind.TRUST_STORE_ERROR -> R.string.failed_trust_store
             },
         ),
         link.detail,
@@ -245,6 +260,14 @@ private fun LinkedCard(details: LinkDetails) {
                 Text(text = stringResource(R.string.linked_via_fallback), style = MaterialTheme.typography.bodySmall)
             }
             Text(
+                text = stringResource(
+                    if (details.newlyPaired) R.string.linked_secure_new else R.string.linked_secure_known,
+                    details.tlsProtocol,
+                    details.peerKey,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
                 text = stringResource(R.string.linked_uptime, details.uptimeMs / 1000),
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -262,6 +285,57 @@ private fun LinkedCard(details: LinkDetails) {
                 ),
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+    }
+}
+
+@Composable
+private fun PairingCard(state: LinkState.Pairing, actions: ConnectionActions) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(text = stringResource(R.string.pairing_code_label), style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = state.code,
+                style = MaterialTheme.typography.displayMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+            if (state.waitingForPeer) {
+                Text(text = stringResource(R.string.pairing_waiting), style = MaterialTheme.typography.bodyMedium)
+            } else {
+                Text(text = stringResource(R.string.pairing_question), style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { actions.onPairingAnswer(true) }) { Text(stringResource(R.string.btn_codes_match)) }
+                    OutlinedButton(onClick = { actions.onPairingAnswer(false) }) { Text(stringResource(R.string.btn_codes_differ)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PairedDevicesCard(ui: LinkUiState, actions: ConnectionActions) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text = stringResource(R.string.paired_title), style = MaterialTheme.typography.titleSmall)
+            ui.ownKey?.let {
+                Text(text = stringResource(R.string.own_key, it), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            }
+            if (ui.pairedDevices.isEmpty()) {
+                Text(text = stringResource(R.string.paired_none), style = MaterialTheme.typography.bodySmall)
+            }
+            ui.pairedDevices.forEach { device ->
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(text = device.name, style = MaterialTheme.typography.bodyMedium)
+                        Text(text = device.shortKey, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                    OutlinedButton(onClick = { actions.onForget(device.fingerprintHex) }) { Text(stringResource(R.string.btn_forget)) }
+                }
+            }
         }
     }
 }

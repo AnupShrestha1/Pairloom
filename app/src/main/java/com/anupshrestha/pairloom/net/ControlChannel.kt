@@ -17,7 +17,8 @@ import java.io.IOException
 import java.net.Socket
 
 /**
- * The TCP control link between the two phones: a HELLO exchange followed by a ping/pong heartbeat
+ * The control link between the two phones, normally running on a mutual TLS socket. Session setup
+ * (HELLO, STATUS, pairing) uses [send] and [receive]; after that [run] runs the ping/pong heartbeat
  * in both directions.
  *
  * All reads and writes are blocking and must run off the main thread. [close] is safe from any
@@ -25,7 +26,8 @@ import java.net.Socket
  */
 class ControlChannel(
     private val socket: Socket,
-    private val localName: String,
+    private val deadAfterNanos: Long = DEAD_AFTER_NANOS,
+    private val pingIntervalMs: Long = PING_INTERVAL_MS,
     private val log: (String) -> Unit,
 ) : Closeable {
     sealed interface Exit {
@@ -46,24 +48,27 @@ class ControlChannel(
 
     private val tracker = PingTracker()
 
+    /** Sends one message (session setup). */
+    fun sendMessage(message: Message) = send(message)
+
     /**
-     * Sends our HELLO and waits for the peer's. Returns the peer's device name.
+     * Waits up to [timeoutMs] for the next message (session setup only, before [run]).
      *
-     * @throws ControlProtocol.VersionMismatchException if the peer speaks another version
      * @throws IOException on timeout, a closed socket, or invalid data
      */
-    fun handshake(timeoutMs: Int): String {
+    fun receive(timeoutMs: Int): Message {
         socket.soTimeout = timeoutMs
-        send(Message.Hello(ControlProtocol.VERSION, localName))
-        val first = ControlProtocol.read(input)
-        socket.soTimeout = 0
-        val hello = first as? Message.Hello
-            ?: throw ControlProtocol.ProtocolException("Expected HELLO, got $first")
-        if (hello.version != ControlProtocol.VERSION) {
-            throw ControlProtocol.VersionMismatchException(hello.version)
+        try {
+            return ControlProtocol.read(input).also { lastRxNanos = System.nanoTime() }
+        } finally {
+            runCatching { socket.soTimeout = 0 }
         }
-        lastRxNanos = System.nanoTime()
-        return hello.deviceName
+    }
+
+    /** Like [receive], but the message must be of type [T]. */
+    inline fun <reified T : Message> expect(timeoutMs: Int): T {
+        val message = receive(timeoutMs)
+        return message as? T ?: throw ControlProtocol.ProtocolException("Expected ${T::class.simpleName}, got $message")
     }
 
     /**
@@ -71,6 +76,9 @@ class ControlChannel(
      * ping loop runs alongside. [onStats] is called from IO threads.
      */
     suspend fun run(onStats: (PingStats) -> Unit): Exit = coroutineScope {
+        // Session setup can take a while (pairing waits for both users), so the dead-link timer
+        // starts now, not at the last setup message.
+        lastRxNanos = System.nanoTime()
         val pinger = launch(Dispatchers.IO) { pingLoop(onStats) }
         val result = withContext(Dispatchers.IO) { readLoop(onStats) }
         pinger.cancel()
@@ -86,6 +94,9 @@ class ControlChannel(
         if (sendBye) runCatching { send(Message.Bye) }
         closeSocket()
     }
+
+    /** True once [close] ran or the link ended. */
+    val isClosed: Boolean get() = socket.isClosed
 
     private fun readLoop(onStats: (PingStats) -> Unit): Exit {
         val result: Exit = try {
@@ -104,7 +115,7 @@ class ControlChannel(
                         break
                     }
 
-                    is Message.Hello -> throw ControlProtocol.ProtocolException("Unexpected HELLO")
+                    else -> throw ControlProtocol.ProtocolException("Unexpected $message during the heartbeat")
                 }
             }
             exit ?: Exit.PeerClosed
@@ -124,8 +135,8 @@ class ControlChannel(
         var seq = 0
         while (currentCoroutineContext().isActive) {
             val now = System.nanoTime()
-            if (now - lastRxNanos > DEAD_AFTER_NANOS) {
-                log("No data from the peer for ${DEAD_AFTER_NANOS / 1_000_000_000} s, closing link")
+            if (now - lastRxNanos > deadAfterNanos) {
+                log("No data from the peer for ${deadAfterNanos / 1_000_000} ms, closing link")
                 if (exit == null) exit = Exit.LinkTimeout
                 closeSocket()
                 return
@@ -140,7 +151,7 @@ class ControlChannel(
                 return
             }
             onStats(tracker.snapshot())
-            delay(PING_INTERVAL_MS)
+            delay(pingIntervalMs)
         }
     }
 
@@ -156,7 +167,7 @@ class ControlChannel(
         runCatching { socket.close() }
     }
 
-    private companion object {
+    companion object {
         const val PING_INTERVAL_MS = 1000L
         const val DEAD_AFTER_NANOS = 5_000_000_000L
     }

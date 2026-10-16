@@ -52,6 +52,21 @@
     <string name="status_opening">Opening the link</string>
     <string name="opening_body">The Wi-Fi Direct group is formed. Starting the control connection.</string>
 
+    <!-- Pairing -->
+    <string name="status_pairing">Pair with %1$s</string>
+    <string name="pairing_body">The phones have not been paired before. Check that both phones show the same code.</string>
+    <string name="pairing_code_label">Pairing code</string>
+    <string name="pairing_question">Does the other phone show exactly this code?</string>
+    <string name="pairing_waiting">Waiting for the other phone to confirm…</string>
+    <string name="btn_codes_match">Codes match</string>
+    <string name="btn_codes_differ">Codes don\'t match</string>
+
+    <!-- Paired phones -->
+    <string name="paired_title">Paired phones</string>
+    <string name="paired_none">None yet. The first connection to a phone asks you to compare a pairing code.</string>
+    <string name="own_key">This phone\'s key: %1$s</string>
+    <string name="btn_forget">Forget</string>
+
     <!-- Linked -->
     <string name="status_linked">Linked</string>
     <string name="linked_peer">Connected to %1$s</string>
@@ -59,6 +74,8 @@
     <string name="linked_group_owner_no">This phone is a Wi-Fi Direct client (group owner address %1$s)</string>
     <string name="linked_timings">Group formed after %1$d ms, link opened %2$d ms later</string>
     <string name="linked_via_fallback">Android did not report the group, so the link was opened after confirming this phone is in the other phone\'s group.</string>
+    <string name="linked_secure_new">Encrypted and authenticated (%1$s). Newly paired, other phone\'s key %2$s</string>
+    <string name="linked_secure_known">Encrypted and authenticated (%1$s). Paired phone, key %2$s</string>
     <string name="linked_uptime">Link up for %1$d s</string>
     <string name="linked_pings">Pings sent %1$d, answered %2$d, lost %3$d</string>
     <string name="linked_rtt">Round trip: last %1$s, average %2$s, min %3$s, max %4$s</string>
@@ -83,6 +100,13 @@
     <string name="failed_group_role_mismatch">Android did not join the other phone\'s group and made this phone a separate group owner, so the two phones are in different groups. Tap Cancel on both phones and try again.</string>
     <string name="failed_link_unverified">Pairloom could not confirm that the connection runs over the Wi-Fi Direct link, so it stopped for safety. Try again.</string>
     <string name="failed_version_mismatch">The other phone runs an incompatible version of Pairloom.</string>
+    <string name="failed_identity_unavailable">This phone\'s secure identity could not be set up, so Pairloom cannot connect safely.</string>
+    <string name="failed_secure_handshake">The secure connection to the other phone could not be set up. Make sure both phones run the same Pairloom version and try again.</string>
+    <string name="failed_identity_changed">The other phone\'s identity does not match the one paired earlier. This can mean the app was reinstalled or reset on one phone, or that another device is pretending to be it. Pairloom stopped. If you trust the other phone, tap Forget for it under Paired phones on both phones, then pair again.</string>
+    <string name="failed_pairing_rejected">Pairing was cancelled because the codes were not confirmed as matching. Nothing was saved.</string>
+    <string name="failed_pairing_timeout">The pairing codes were not confirmed in time. Nothing was saved.</string>
+    <string name="failed_pairing_failed">Pairing failed a security check. Nothing was saved. Try again.</string>
+    <string name="failed_trust_store">Pairloom could not read or save its list of paired phones, so it stopped for safety.</string>
     <string name="detail_format">Details: %1$s</string>
 
     <!-- Log -->
