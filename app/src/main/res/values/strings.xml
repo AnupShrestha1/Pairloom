@@ -1,4 +1,91 @@
 <resources>
     <string name="app_name">Pairloom</string>
     <string name="home_tagline">Local voice intercom for two phones</string>
+
+    <!-- Buttons -->
+    <string name="btn_host">Host</string>
+    <string name="btn_join">Join</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_disconnect">Disconnect</string>
+    <string name="btn_rescan">Rescan</string>
+    <string name="btn_open_location_settings">Open Location settings</string>
+    <string name="btn_open_app_settings">Open app settings</string>
+
+    <!-- Idle -->
+    <string name="status_idle_title">Ready</string>
+    <string name="role_hint">Open Pairloom on both phones. Tap Host on one phone and Join on the other.</string>
+    <string name="cleaning_up">Cleaning up the previous Wi-Fi Direct connection…</string>
+
+    <!-- Permissions -->
+    <string name="status_needs_permission">Permission needed</string>
+    <string name="needs_permission_body">Pairloom uses Wi-Fi Direct to find the other phone, and Android asks for permission to look for nearby devices. Pairloom does not use or store your location. Tap Host or Join to try again.</string>
+    <string name="needs_permission_permanent_body">The permission was denied and Android will no longer ask. Open app settings and allow \"Nearby devices\" (Android 13 and newer) or \"Location\" (Android 12 and older), then try again.</string>
+
+    <!-- Location services -->
+    <string name="location_status_on">Location services: on</string>
+    <string name="location_status_off">Location services: off</string>
+    <string name="status_location_off">Location services are off</string>
+    <string name="location_off_body">Android 12 and older only allow Wi-Fi Direct discovery while Location services are on. Pairloom does not read or store your location. Turn Location on, come back here, and try again.</string>
+    <string name="location_hint">Wi-Fi Direct did not start or did not find a device. Some phones need Location services turned on for this even on Android 13 and newer. Turn Location on and try again.</string>
+
+    <!-- Hosting -->
+    <string name="status_hosting_starting">Creating the Wi-Fi Direct group…</string>
+    <string name="status_hosting_ready">Waiting for the other phone</string>
+    <string name="hosting_ready_body">The group is ready. On the other phone tap Join and choose this phone, then accept the connection prompt on this phone if it appears.</string>
+    <string name="hosting_network_name">Group name: %1$s</string>
+
+    <!-- Discovering -->
+    <string name="status_discovering">Looking for nearby phones</string>
+    <string name="discovering_body">Make sure the other phone is on Host, then tap it below.</string>
+    <string name="discovering_none">No devices found yet. Check that the other phone is hosting and that Wi-Fi is on, then tap Rescan.</string>
+    <string name="peer_type_phone">Phone</string>
+    <string name="peer_type_other">Other device</string>
+    <string name="peer_status_available">available</string>
+    <string name="peer_status_invited">invited</string>
+    <string name="peer_status_connected">connected</string>
+    <string name="peer_status_failed">failed</string>
+    <string name="peer_status_unavailable">unavailable</string>
+
+    <!-- Connecting -->
+    <string name="status_connecting">Connecting to %1$s</string>
+    <string name="connecting_body">The other phone may ask you to accept the connection. Tap Accept there.</string>
+    <string name="status_opening">Opening the link</string>
+    <string name="opening_body">The Wi-Fi Direct group is formed. Starting the control connection.</string>
+
+    <!-- Linked -->
+    <string name="status_linked">Linked</string>
+    <string name="linked_peer">Connected to %1$s</string>
+    <string name="linked_group_owner_yes">This phone is the Wi-Fi Direct group owner</string>
+    <string name="linked_group_owner_no">This phone is a Wi-Fi Direct client (group owner address %1$s)</string>
+    <string name="linked_timings">Group formed after %1$d ms, link opened %2$d ms later</string>
+    <string name="linked_via_fallback">Android did not report the group, so the link was opened after confirming this phone is in the other phone\'s group.</string>
+    <string name="linked_uptime">Link up for %1$d s</string>
+    <string name="linked_pings">Pings sent %1$d, answered %2$d, lost %3$d</string>
+    <string name="linked_rtt">Round trip: last %1$s, average %2$s, min %3$s, max %4$s</string>
+    <string name="rtt_none">–</string>
+
+    <!-- Disconnected -->
+    <string name="status_disconnected">Disconnected</string>
+    <string name="disconnected_local">You disconnected.</string>
+    <string name="disconnected_peer_closed">The other phone disconnected.</string>
+    <string name="disconnected_link_timeout">The other phone stopped responding.</string>
+    <string name="disconnected_group_ended">The Wi-Fi Direct group ended.</string>
+    <string name="disconnected_protocol_error">The other phone sent invalid data.</string>
+    <string name="disconnected_io_error">The connection was lost.</string>
+
+    <!-- Failures -->
+    <string name="status_failed">Could not connect</string>
+    <string name="failed_wifi_off">Wi-Fi Direct is turned off. Turn Wi-Fi on and try again.</string>
+    <string name="failed_unsupported">Wi-Fi Direct is not available on this phone.</string>
+    <string name="failed_operation">Android reported a Wi-Fi Direct error.</string>
+    <string name="failed_connect_timeout">The other phone did not accept in time. Try again and tap Accept on the other phone.</string>
+    <string name="failed_socket">The Wi-Fi Direct group formed, but the control connection could not be opened.</string>
+    <string name="failed_group_role_mismatch">Android did not join the other phone\'s group and made this phone a separate group owner, so the two phones are in different groups. Tap Cancel on both phones and try again.</string>
+    <string name="failed_link_unverified">Pairloom could not confirm that the connection runs over the Wi-Fi Direct link, so it stopped for safety. Try again.</string>
+    <string name="failed_version_mismatch">The other phone runs an incompatible version of Pairloom.</string>
+    <string name="detail_format">Details: %1$s</string>
+
+    <!-- Log -->
+    <string name="log_title">Event log</string>
+    <string name="log_empty">Nothing yet.</string>
 </resources>
