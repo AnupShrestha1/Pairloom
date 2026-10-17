@@ -227,6 +227,46 @@ No crashes. A second run had extra spurts from someone pressing the A03s by hand
 shows real touchscreen events, so they were not spurious. Talk-button presses and releases are now
 logged.
 
+## A4 results: Opus (2026-10-17)
+Design as built:
+- The media offer lists the caller's codecs as a bit mask. The answer picks one codec for both
+  directions: Opus if both phones have the platform encoder and decoder (encoder from Android 10),
+  otherwise PCM. The test tone always uses PCM. Control protocol version 4.
+- `c2.android.opus.encoder` / `decoder` through MediaCodec, 48 kHz mono, 32 kbit/s. The platform
+  encoder makes 20 ms packets, so each packet carries two 10 ms frames. The decoder gets an
+  OpusHead with no pre-skip, so decoded audio maps exactly onto frame indexes.
+- The first version waited for the codec on the media threads (synchronous mode). The codec runs in
+  the media process and sometimes took over 10 ms, so packets missed their slot: 3-5 % of frames
+  were concealed. Now both codecs run in asynchronous mode with realtime priority, and the decoder in
+  low-latency mode. Without low-latency mode, the decoder was seen holding output for hundreds of
+  milliseconds.
+- Push-to-talk spurts run on to a whole packet. TALK_END waits 30 ms, so the encoder's last packet
+  goes out first.
+- The session measures decode delay (packet arrival to decoded frame) and counts it, along with the
+  6.5 ms Opus look-ahead, in the one-way estimate.
+
+Comparison: one 60 s call each, the Redmi calling the A03s, earpiece, Redmi off home Wi-Fi:
+
+| | Opus (Redmi rx / A03s rx) | PCM (Redmi rx / A03s rx) |
+|---|---|---|
+| Bit rate per direction | 32 kbit/s | 768 kbit/s |
+| Packets sent | 3,724 / 3,696 (20 ms + probes) | 6,605 / 6,572 |
+| Network loss | 0 % / 0 % | 0 % / 0 % |
+| Concealed | 3.0 % / 2.1 % | 2.3 % / 3.0 % |
+| Decode delay | 6 / 20 ms | under 1 ms |
+| Delay spread | 70 / 64 ms | 64 / 68 ms |
+| Estimated one-way | 194 / 200 ms | 184 / 180 ms |
+
+Conclusion: Opus works and needs 24 times less airtime, but on these phones it costs about 15 ms
+(look-ahead plus decoding), with no gain in loss at close range. The default is therefore PCM, with
+Opus as a diagnostics switch ("Opus: off (PCM)" on the media card). Revisit in A5 with a range test,
+where less airtime may lower loss. On API 26-28 (no platform encoder) the negotiation falls back to
+PCM by itself.
+
+Also found: with the Redmi on 5 GHz home Wi-Fi (5785 MHz), it twice failed to join the A03s's group
+on 2.4 GHz (2437 MHz, the A03s's home-network channel; the A03s has 2.4 GHz only). Connect timed out
+after 60 s; it worked once the Redmi left home Wi-Fi. This is an A5 item.
+
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece
   default for full duplex, PTT for speaker use.

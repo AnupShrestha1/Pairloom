@@ -181,7 +181,7 @@ data class LinkUiState(
     /** The user refused the microphone permission; calls cannot start. */
     val micDenied: Boolean = false,
     /** Diagnostics: whether this phone offers Opus for voice. */
-    val opusEnabled: Boolean = true,
+    val opusEnabled: Boolean = false,
 )
 
 /**

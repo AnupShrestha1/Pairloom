@@ -381,8 +381,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     /** Whether this phone has a platform Opus encoder and decoder (checked once). */
     private val opusAvailable: Boolean by lazy { OpusSupport.available().also { log(if (it) "Opus available" else "Opus not available; voice uses PCM") } }
 
-    /** Diagnostics switch: offer Opus for voice (on by default). PCM is used when either phone has it off. */
-    @Volatile private var opusEnabled = true
+    /**
+     * Diagnostics switch: offer Opus for voice. Off by default: on Wi-Fi Direct, bandwidth is
+     * plentiful and PCM was about 15 ms quicker with the same loss (A4 results). PCM is used when
+     * either phone has it off.
+     */
+    @Volatile private var opusEnabled = false
 
     fun toggleOpus() {
         opusEnabled = !opusEnabled
