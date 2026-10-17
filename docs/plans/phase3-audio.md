@@ -325,8 +325,11 @@ key. Forgetting a phone replaces this phone's group. Details are in
 | Media receive | 23 | 8 | 19 | 6 |
 | Media playout | 3 | 2 | 3 | 2 |
 
-Still to do: the UI recomposes the call screen every 500 ms (12 % of a core on the A03s); a real
-battery figure off USB power; a real headset; an interrupting phone call.
+The link statistics, the media test card and the event log are now behind "Show details" (hidden
+by default). They were redrawn twice a second during calls. Profile build, 60 s of call with details
+hidden: A03s 33 % of one core (main thread 7.5 %, was 12 %), Redmi 22 % (main 3.6 %).
+
+Still to do: a real battery figure off USB power, a real headset, and an interrupting phone call.
 
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece

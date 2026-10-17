@@ -20,6 +20,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +84,7 @@ fun ConnectionScreen(
     modifier: Modifier = Modifier,
 ) {
     val link = ui.link
+    var showDetails by rememberSaveable { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -122,8 +125,10 @@ fun ConnectionScreen(
             is LinkState.Pairing -> PairingCard(link, actions)
             is LinkState.Linked -> {
                 CallCard(link.details, ui.micDenied, actions)
-                LinkedCard(link.details)
-                MediaCard(link.details, ui.opusEnabled, actions)
+                if (showDetails) {
+                    LinkedCard(link.details)
+                    MediaCard(link.details, ui.opusEnabled, actions)
+                }
             }
             else -> Unit
         }
@@ -153,7 +158,12 @@ fun ConnectionScreen(
             style = MaterialTheme.typography.bodySmall,
         )
 
-        LogCard(ui.log)
+        // Link statistics, the media test and the event log are for diagnosis, and redrawing them
+        // twice a second during a call cost noticeable CPU on the A03s: hidden unless asked for.
+        TextButton(onClick = { showDetails = !showDetails }) {
+            Text(stringResource(if (showDetails) R.string.btn_hide_details else R.string.btn_show_details))
+        }
+        if (showDetails) LogCard(ui.log)
     }
 }
 
