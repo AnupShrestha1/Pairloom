@@ -75,3 +75,18 @@ interrupting phone call) carry over and are done in R5.
   script's polling included, with no host prompt. No crashes.
 - Not done: automatic roles. "Be ready" on one phone is still needed. Picking roles automatically
   would need each phone to see the other's group before linking. Revisit after R3.
+
+## R3 results (2026-10-17)
+- **Tap to talk**: push-to-talk can work by tapping (tap to start, tap to stop) instead of
+  holding. It is on automatically while TalkBack's touch exploration is running, since a hold
+  gesture is hard to perform there, and it can be chosen with a switch otherwise. The microphone
+  stops sending if the panel goes away or the mode changes mid-press.
+- **TalkBack**: the talk area is a button with a state ("talking" / "listening") and an action
+  label. "<name> is talking", "Nothing heard from…" and the call-ended message are polite live
+  regions, and an incoming call or push-to-talk request is assertive. The pairing code is read
+  digit by digit.
+- **Large fonts**: the big buttons use a minimum height instead of a fixed one, so text can grow.
+- Device check (A03s): switching on tap to talk, one tap made the Redmi show "SM-A037F is
+  talking", and a second tap brought back "Nobody is talking", with a clean spurt in the log.
+- Not checked on a phone: TalkBack itself and 200 % font scale. Both are system settings the user
+  turns on; to be done by hand.

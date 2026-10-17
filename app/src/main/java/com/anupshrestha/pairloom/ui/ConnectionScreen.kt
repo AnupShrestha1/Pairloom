@@ -2,6 +2,17 @@ package com.anupshrestha.pairloom.ui
 
 import android.net.wifi.p2p.WifiP2pDevice
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.material3.Switch
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.layout.heightIn
+import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -182,12 +193,12 @@ private fun PairedPhonesHome(ui: LinkUiState, canStart: Boolean, actions: Connec
                     Button(
                         onClick = { if (d.canJoinDirectly) actions.onConnectPaired(d.fingerprintHex) else actions.onJoin() },
                         enabled = canStart,
-                        modifier = Modifier.weight(1f).height(52.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = 52.dp),
                     ) { Text(stringResource(R.string.btn_connect)) }
                     OutlinedButton(
                         onClick = actions.onHost,
                         enabled = canStart,
-                        modifier = Modifier.weight(1f).height(52.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = 52.dp),
                     ) { Text(stringResource(R.string.btn_be_ready)) }
                 }
                 Text(
@@ -402,7 +413,11 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
             when {
                 details.incomingCall -> {
                     val prompt = if (details.incomingKind == MediaKind.PTT) R.string.ptt_incoming else R.string.call_incoming
-                    Text(text = stringResource(prompt, details.peerName), style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = stringResource(prompt, details.peerName),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = actions.onAcceptCall) { Text(stringResource(R.string.btn_accept_call)) }
                         OutlinedButton(onClick = actions.onDeclineCall) { Text(stringResource(R.string.btn_decline_call)) }
@@ -439,14 +454,16 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
                 }
                 else -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = actions.onCall, enabled = !busy, modifier = Modifier.weight(1f).height(64.dp)) {
+                        Button(onClick = actions.onCall, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 64.dp)) {
                             Text(stringResource(R.string.btn_call), style = MaterialTheme.typography.titleMedium)
                         }
-                        FilledTonalButton(onClick = actions.onPushToTalk, enabled = !busy, modifier = Modifier.weight(1f).height(64.dp)) {
+                        FilledTonalButton(onClick = actions.onPushToTalk, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 64.dp)) {
                             Text(stringResource(R.string.btn_push_to_talk), style = MaterialTheme.typography.titleMedium)
                         }
                     }
-                    endMessage(details)?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
+                    endMessage(details)?.let {
+                        Text(text = it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    }
                     if (micDenied) Text(text = stringResource(R.string.call_mic_denied), style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -473,6 +490,7 @@ private fun CallStatusLines(details: LinkDetails) {
             text = stringResource(R.string.call_signal_lost, details.peerName, (s.silentMs / 1000).toInt()),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
     }
 }
@@ -505,40 +523,78 @@ private fun PushToTalkPanel(details: LinkDetails, actions: ConnectionActions) {
         s?.peerTalking == true -> stringResource(R.string.ptt_peer_talking, details.peerName)
         else -> stringResource(R.string.ptt_quiet)
     }
-    Text(text = status, style = MaterialTheme.typography.titleMedium, color = if (s?.peerTalking == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+    Text(
+        text = status,
+        style = MaterialTheme.typography.titleMedium,
+        color = if (s?.peerTalking == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
 
-    var pressed by remember { mutableStateOf(false) }
+    // Holding is hard with TalkBack (and for some hands), so tap-to-talk is used automatically while
+    // TalkBack's touch exploration is on, and can be chosen by hand.
+    val touchExploration = rememberTouchExploration()
+    var tapChosen by rememberSaveable { mutableStateOf(false) }
+    val tapMode = tapChosen || touchExploration
+    var talking by remember { mutableStateOf(false) }
     val onTalk by rememberUpdatedState(actions.onTalk)
-    val label = stringResource(R.string.ptt_hold)
-    Surface(
-        shape = MaterialTheme.shapes.extraLarge,
-        color = if (pressed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(140.dp)
-            .semantics { contentDescription = label }
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        pressed = true
-                        onTalk(true)
-                        try {
-                            tryAwaitRelease()
-                        } finally {
-                            pressed = false
-                            onTalk(false)
-                        }
-                    },
-                )
-            },
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = stringResource(if (pressed) R.string.ptt_release else R.string.ptt_hold),
-                style = MaterialTheme.typography.headlineSmall,
-                color = if (pressed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onPrimaryContainer,
+    fun setTalking(on: Boolean) {
+        if (talking == on) return
+        talking = on
+        onTalk(on)
+    }
+    // Never leave the microphone sending if the panel goes away or the mode changes mid-press.
+    DisposableEffect(tapMode) { onDispose { if (talking) setTalking(false) } }
+    val idleText = stringResource(if (tapMode) R.string.ptt_tap else R.string.ptt_hold)
+    val activeText = stringResource(if (tapMode) R.string.ptt_tap_stop else R.string.ptt_release)
+    val stateText = stringResource(if (talking) R.string.ptt_state_talking else R.string.ptt_state_listening)
+    val surfaceModifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 140.dp)
+        .semantics {
+            role = Role.Button
+            stateDescription = stateText
+        }
+    val gestures = if (tapMode) {
+        Modifier.clickable(onClickLabel = if (talking) activeText else idleText) { setTalking(!talking) }
+    } else {
+        Modifier.pointerInput(Unit) {
+            detectTapGestures(
+                onPress = {
+                    setTalking(true)
+                    try {
+                        tryAwaitRelease()
+                    } finally {
+                        setTalking(false)
+                    }
+                },
             )
         }
+    }
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = if (talking) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer,
+        modifier = surfaceModifier.then(gestures),
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = if (talking) activeText else idleText,
+                style = MaterialTheme.typography.headlineSmall,
+                color = if (talking) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().toggleable(
+        value = tapMode,
+        enabled = !touchExploration,
+        role = Role.Switch,
+        onValueChange = { tapChosen = it },
+    )) {
+        Text(
+            text = stringResource(if (touchExploration) R.string.ptt_tap_mode_talkback else R.string.ptt_tap_mode),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = tapMode, onCheckedChange = null, enabled = !touchExploration)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = actions.onToggleSpeaker) {
@@ -591,10 +647,13 @@ private fun PairingCard(state: LinkState.Pairing, actions: ConnectionActions) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(text = stringResource(R.string.pairing_code_label), style = MaterialTheme.typography.titleSmall)
+            val spoken = state.code.filter { it.isDigit() }.toList().joinToString(" ")
             Text(
                 text = state.code,
                 style = MaterialTheme.typography.displayMedium,
                 fontFamily = FontFamily.Monospace,
+                // TalkBack reads "4 8 2 ..." rather than "four hundred eighty-two thousand ...".
+                modifier = Modifier.semantics { contentDescription = spoken },
             )
             if (state.waitingForPeer) {
                 Text(text = stringResource(R.string.pairing_waiting), style = MaterialTheme.typography.bodyMedium)
@@ -655,3 +714,17 @@ private fun LogCard(lines: List<String>) {
 }
 
 private const val MAX_VISIBLE_LOG_LINES = 40
+
+/** Whether TalkBack (or another touch-exploration service) is on, kept up to date. */
+@Composable
+private fun rememberTouchExploration(): Boolean {
+    val context = LocalContext.current
+    val manager = remember { context.getSystemService(AccessibilityManager::class.java) }
+    var on by remember { mutableStateOf(manager?.isTouchExplorationEnabled == true) }
+    DisposableEffect(manager) {
+        val listener = AccessibilityManager.TouchExplorationStateChangeListener { on = it }
+        manager?.addTouchExplorationStateChangeListener(listener)
+        onDispose { manager?.removeTouchExplorationStateChangeListener(listener) }
+    }
+    return on
+}

@@ -100,6 +100,12 @@
     <string name="ptt_active">Push-to-talk with %1$s</string>
     <string name="ptt_hold">Hold to talk</string>
     <string name="ptt_release">Talking… release to listen</string>
+    <string name="ptt_tap">Tap to talk</string>
+    <string name="ptt_tap_stop">Talking… tap to stop</string>
+    <string name="ptt_state_talking">talking</string>
+    <string name="ptt_state_listening">listening</string>
+    <string name="ptt_tap_mode">Tap to talk (instead of holding)</string>
+    <string name="ptt_tap_mode_talkback">Tap to talk is on while TalkBack is running</string>
     <string name="ptt_you_talking">You are talking</string>
     <string name="ptt_peer_talking">%1$s is talking</string>
     <string name="ptt_both_talking">You and %1$s are both talking</string>
