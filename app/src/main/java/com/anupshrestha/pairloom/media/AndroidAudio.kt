@@ -3,6 +3,7 @@ package com.anupshrestha.pairloom.media
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
@@ -14,6 +15,8 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import java.io.IOException
 
 private const val SAMPLE_RATE = 48_000
@@ -170,14 +173,35 @@ class SpeakerSink(private val log: (String) -> Unit, private val framesPerBurst:
     }
 }
 
+/** Where call audio is playing. */
+enum class AudioRoute { EARPIECE, SPEAKER, HEADSET }
+
+private val HEADSET_TYPES = setOf(
+    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+    AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+    AudioDeviceInfo.TYPE_USB_HEADSET,
+)
+
 /**
  * Phone-call style audio for the duration of a call: audio focus, communication mode, and the
- * earpiece or the loudspeaker. [onFocusLost] is called if another app (or a phone call) takes over.
+ * route. A wired or USB headset is used whenever one is plugged in (unless the user chose the
+ * loudspeaker), and the route follows plugging and unplugging during the call. [onFocusLost] is
+ * called if another app (or a phone call) takes the audio, or if focus is refused at the start.
  */
 class CallAudio(context: Context, private val log: (String) -> Unit, private val onFocusLost: () -> Unit) {
     private val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var focus: AudioFocusRequest? = null
     private var previousMode = AudioManager.MODE_NORMAL
+    @Volatile private var speakerWanted = false
+    @Volatile private var active = false
+
+    @Volatile var route: AudioRoute = AudioRoute.EARPIECE
+        private set
+
+    private val devices = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) { if (active) applyRoute() }
+        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) { if (active) applyRoute() }
+    }
 
     fun begin(speaker: Boolean) {
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -199,24 +223,58 @@ class CallAudio(context: Context, private val log: (String) -> Unit, private val
         log("Audio focus ${if (granted) "granted" else "not granted"}")
         previousMode = am.mode
         am.mode = AudioManager.MODE_IN_COMMUNICATION
-        setSpeaker(speaker)
+        speakerWanted = speaker
+        active = true
+        applyRoute(force = true)
+        am.registerAudioDeviceCallback(devices, Handler(Looper.getMainLooper()))
+        // Refused focus means a phone call (or similar) holds the audio: do not talk over it.
+        if (!granted) onFocusLost()
+    }
+
+    fun setSpeaker(on: Boolean) {
+        speakerWanted = on
+        applyRoute(force = true)
     }
 
     @Suppress("DEPRECATION")
-    fun setSpeaker(on: Boolean) {
+    @Synchronized
+    private fun applyRoute(force: Boolean = false) {
+        val wanted: AudioRoute
+        var ok = true
         if (Build.VERSION.SDK_INT >= 31) {
-            val wanted = if (on) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-            val device = am.availableCommunicationDevices.firstOrNull { it.type == wanted }
-            val ok = device != null && am.setCommunicationDevice(device)
-            log("Audio route: ${if (on) "speaker" else "earpiece"}${if (ok) "" else " (not available)"}")
+            val available = am.availableCommunicationDevices
+            val headset = available.firstOrNull { it.type in HEADSET_TYPES }
+            val device = when {
+                speakerWanted -> available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                headset != null -> headset
+                else -> available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+            }
+            wanted = when {
+                speakerWanted -> AudioRoute.SPEAKER
+                headset != null -> AudioRoute.HEADSET
+                else -> AudioRoute.EARPIECE
+            }
+            if (!force && wanted == route) return
+            ok = device != null && am.setCommunicationDevice(device)
         } else {
-            am.isSpeakerphoneOn = on
-            log("Audio route: ${if (on) "speaker" else "earpiece"}")
+            // Before Android 12 the platform routes to a plugged-in headset by itself.
+            val headset = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in HEADSET_TYPES }
+            wanted = when {
+                speakerWanted -> AudioRoute.SPEAKER
+                headset -> AudioRoute.HEADSET
+                else -> AudioRoute.EARPIECE
+            }
+            if (!force && wanted == route) return
+            am.isSpeakerphoneOn = speakerWanted
         }
+        route = wanted
+        log("Audio route: ${wanted.name.lowercase()}${if (ok) "" else " (not available)"}")
     }
 
     @Suppress("DEPRECATION")
     fun end() {
+        active = false
+        runCatching { am.unregisterAudioDeviceCallback(devices) }
         if (Build.VERSION.SDK_INT >= 31) runCatching { am.clearCommunicationDevice() } else runCatching { am.isSpeakerphoneOn = false }
         runCatching { am.mode = previousMode }
         focus?.let { runCatching { am.abandonAudioFocusRequest(it) } }

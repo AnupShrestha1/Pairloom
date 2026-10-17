@@ -104,6 +104,20 @@
     <string name="ptt_peer_talking">%1$s is talking</string>
     <string name="ptt_both_talking">You and %1$s are both talking</string>
     <string name="ptt_quiet">Nobody is talking</string>
+    <string name="call_route">Audio: %1$s</string>
+    <string name="route_earpiece">earpiece</string>
+    <string name="route_speaker">loudspeaker</string>
+    <string name="route_headset">headset</string>
+    <string name="call_signal_lost">Nothing heard from %1$s for %2$d s. The phones may be too far apart; the call ends if the link is lost.</string>
+    <string name="end_what_call">call</string>
+    <string name="end_what_ptt">push-to-talk</string>
+    <string name="end_here">%1$s ended.</string>
+    <string name="end_by_peer">%1$s ended by %2$s.</string>
+    <string name="end_missed">Missed %1$s: %2$s cancelled it.</string>
+    <string name="end_declined_here">%1$s declined.</string>
+    <string name="end_declined_by_peer">%1$s declined the %2$s.</string>
+    <string name="end_failed">%1$s could not start: the audio could not be opened on one of the phones.</string>
+    <string name="end_audio_taken">%1$s ended: another app or a phone call took the audio.</string>
     <string name="call_mic_denied">Pairloom needs the microphone for calls. Allow it when asked, or in app settings.</string>
 
     <!-- Media (milestone A1 test tone) -->

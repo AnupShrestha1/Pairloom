@@ -10,6 +10,7 @@ import com.anupshrestha.pairloom.media.PcmFrameSink
 import com.anupshrestha.pairloom.media.MediaHeader
 import com.anupshrestha.pairloom.media.FrameSink
 import com.anupshrestha.pairloom.media.FrameSource
+import com.anupshrestha.pairloom.media.MediaEnd
 import com.anupshrestha.pairloom.media.MediaKind
 import com.anupshrestha.pairloom.media.MediaNegotiation
 import com.anupshrestha.pairloom.media.MediaSealer
@@ -334,6 +335,43 @@ class MediaSessionTest {
         assertNull(n.session)
         assertTrue(!n.isOffering)
         assertEquals(Message.MediaStop, sent.last())
+    }
+
+    @Test
+    fun bothPhonesLearnWhyACallEnded() {
+        val ends = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val sides = arrayOfNulls<MediaNegotiation>(2)
+        fun make(i: Int, server: Boolean) = MediaNegotiation(
+            server, lo, lo, send = { m -> sides[1 - i]!!.onMessage(m) },
+            onEnded = { kind, reason -> ends += "$i $kind $reason" },
+        )
+        sides[0] = make(0, true); sides[1] = make(1, false)
+        val (a, b) = sides.requireNoNulls()
+        // Answered, then ended by the caller.
+        a.start(MediaKind.VOICE); b.accept(); a.stop()
+        assertEquals(listOf("0 VOICE ENDED_HERE", "1 VOICE ENDED_BY_PEER"), ends.sorted())
+        // Declined by the callee.
+        ends.clear(); a.start(MediaKind.PTT); b.decline()
+        assertEquals(listOf("0 PTT DECLINED_BY_PEER", "1 PTT DECLINED_HERE"), ends.sorted())
+        // Cancelled by the caller before the answer: a missed call on the other phone.
+        ends.clear(); a.start(MediaKind.VOICE); a.stop()
+        assertEquals(listOf("0 VOICE ENDED_HERE", "1 VOICE MISSED"), ends.sorted())
+        // Taken by another app (the reason comes from the caller of stop).
+        ends.clear(); a.start(MediaKind.VOICE); b.accept(); b.stop(MediaEnd.AUDIO_TAKEN)
+        assertEquals(listOf("0 VOICE ENDED_BY_PEER", "1 VOICE AUDIO_TAKEN"), ends.sorted())
+        // Stopping with nothing running reports nothing; link teardown (close) reports nothing.
+        ends.clear(); a.stop(); a.start(MediaKind.VOICE); b.accept(); a.close(); b.close()
+        assertTrue(ends.isEmpty())
+    }
+
+    @Test
+    fun silenceIsReportedWhenNothingArrives() {
+        val s = MediaSession(socket(), InetSocketAddress(lo, socket().localPort), DirectionKey.random(), DirectionKey.random())
+        s.start()
+        Thread.sleep(1_200)
+        val st = s.stop()
+        assertTrue("silent ${st.silentMs}", st.silentMs >= 1_000)
+        assertTrue(st.signalLost)
     }
 
     @Test

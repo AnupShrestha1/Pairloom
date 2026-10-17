@@ -17,6 +17,7 @@ import com.anupshrestha.pairloom.media.CallAudio
 import com.anupshrestha.pairloom.media.DirectionKey
 import com.anupshrestha.pairloom.media.AudioCodec
 import com.anupshrestha.pairloom.media.CodecPair
+import com.anupshrestha.pairloom.media.MediaEnd
 import com.anupshrestha.pairloom.media.MediaKind
 import com.anupshrestha.pairloom.media.OpusSupport
 import com.anupshrestha.pairloom.media.MediaNegotiation
@@ -331,10 +332,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Ends the tone or the call, or cancels an outgoing call. */
-    fun stopMedia() {
+    fun stopMedia() = stopMedia(MediaEnd.ENDED_HERE)
+
+    private fun stopMedia(reason: MediaEnd) {
         val m = media ?: return
-        viewModelScope.launch(Dispatchers.IO) { runCatching { m.stop() } }
+        viewModelScope.launch(Dispatchers.IO) { runCatching { m.stop(reason) } }
     }
+
+    /** How the last call or push-to-talk session ended, shown until the next one starts. */
+    @Volatile private var lastEnd: Pair<MediaKind, MediaEnd>? = null
 
     /** Accepts the incoming call. The activity has already made sure RECORD_AUDIO is granted. */
     fun acceptCall() {
@@ -400,7 +406,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         callMuted = false
         // Calls start on the earpiece; push-to-talk on the speaker, like a walkie-talkie.
         callSpeaker = kind == MediaKind.PTT
-        val audio = CallAudio(app, { log(it) }) { stopMedia() }
+        val audio = CallAudio(app, { log(it) }) { stopMedia(MediaEnd.AUDIO_TAKEN) }
         audio.begin(speaker = callSpeaker)
         val mic = try {
             MicrophoneSource { log(it) }
@@ -456,6 +462,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 val offering = m?.isOffering == true
                 val incoming = m?.incomingKind
                 holdWifiLock(m?.isBusy == true)
+                if (m?.isBusy == true) lastEnd = null
+                val end = lastEnd
                 _ui.update { s ->
                     val l = s.link
                     if (l is LinkState.Linked) {
@@ -470,6 +478,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                                     incomingKind = incoming,
                                     muted = callMuted,
                                     speakerOn = callSpeaker,
+                                    audioRoute = if (stats != null) activeCallAudio?.route else null,
+                                    lastEndKind = end?.first,
+                                    lastEnd = end?.second,
                                 ),
                             ),
                         )
@@ -1016,6 +1027,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 send = { ch.sendMessage(it) },
                 newSession = { kind, codec, s, p, out, input -> newMediaSession(kind, codec, s, p, out, input) },
                 log = { log(it) },
+                onEnded = { kind, reason ->
+                    log("Media ended: $kind, $reason")
+                    if (kind != MediaKind.TONE) lastEnd = kind to reason
+                },
                 localCodecs = { if (opusEnabled && opusAvailable) AudioCodec.OPUS.bit else 0 },
             )
             startMediaPoll(generation)

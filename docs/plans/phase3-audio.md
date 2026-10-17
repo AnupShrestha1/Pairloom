@@ -263,9 +263,36 @@ Opus as a diagnostics switch ("Opus: off (PCM)" on the media card). Revisit in A
 where less airtime may lower loss. On API 26-28 (no platform encoder) the negotiation falls back to
 PCM by itself.
 
-Also found: with the Redmi on 5 GHz home Wi-Fi (5785 MHz), it twice failed to join the A03s's group
-on 2.4 GHz (2437 MHz, the A03s's home-network channel; the A03s has 2.4 GHz only). Connect timed out
-after 60 s; it worked once the Redmi left home Wi-Fi. This is an A5 item.
+Also found: some links failed with "connect timed out after 60 s". At first this looked like the
+Redmi's 5 GHz home Wi-Fi, but it also happened with the Redmi off home Wi-Fi. The A03s's system
+log shows the real cause: the join (a push-button provision request) makes the A03s show Android's
+own "invitation to connect" dialog (`WifiDialogActivity`). When nobody accepts it, the attempt
+times out. The app already tells the host's user to accept the prompt. Runs that worked had
+someone accepting it, or a recent approval. Avoiding the prompt for paired phones (for example
+joining with group credentials) is a later improvement.
+
+## A5 hardening, part 1 (2026-10-17)
+- **Why a call ended** is shown on both phones: ended here, ended by the other phone, missed,
+  declined, could not start, or audio taken by another app or a phone call. The reason travels with
+  the existing MEDIA_STOP, so the protocol is unchanged.
+- **Audio focus**: losing it (a phone call, another app) ends the call with that reason. Refused
+  focus at the start also ends it, so Pairloom does not talk over a phone call.
+- **Route**: a wired or USB headset is used whenever one is plugged in, unless the user chose the
+  loudspeaker. The route follows plugging and unplugging during the call, and the call screen
+  shows it ("Audio: earpiece / loudspeaker / headset"). Not yet tried with a real headset.
+- **Link loss**: the session tracks time since the last authenticated packet. Probes arrive every
+  200 ms even in push-to-talk silence, so after 1 s of nothing the call screen warns "Nothing
+  heard from <name>". The control channel ends the link after 5 s.
+
+Device check (A03s hosting, Redmi calling; the A03s's connection prompt was accepted by the test
+script with the user's permission):
+
+| Check | Result |
+|---|---|
+| Route on the call screen | "Audio: earpiece" |
+| Redmi ends the call | A03s: "Call ended by 23117RA68G."; Redmi: "Call ended." |
+| App killed on the A03s mid-call | Redmi warned after 3.3 s, then ended after 7.7 s: "The other phone stopped responding." |
+| Crashes | none |
 
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece

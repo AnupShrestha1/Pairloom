@@ -135,6 +135,11 @@ data class LinkDetails(
     val incomingKind: com.anupshrestha.pairloom.media.MediaKind? = null,
     val muted: Boolean = false,
     val speakerOn: Boolean = false,
+    /** Where call audio plays while a call or push-to-talk runs. */
+    val audioRoute: com.anupshrestha.pairloom.media.AudioRoute? = null,
+    /** How the last call or push-to-talk session ended, until the next one starts. */
+    val lastEndKind: com.anupshrestha.pairloom.media.MediaKind? = null,
+    val lastEnd: com.anupshrestha.pairloom.media.MediaEnd? = null,
 )
 
 /** A paired phone as shown in the list. */

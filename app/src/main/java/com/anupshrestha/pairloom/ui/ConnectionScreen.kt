@@ -36,6 +36,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.anupshrestha.pairloom.R
+import com.anupshrestha.pairloom.media.AudioRoute
+import com.anupshrestha.pairloom.media.MediaEnd
 import com.anupshrestha.pairloom.media.MediaKind
 import com.anupshrestha.pairloom.session.DisconnectReason
 import com.anupshrestha.pairloom.session.FailureKind
@@ -336,6 +338,7 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
                 }
                 inCall -> {
                     Text(text = stringResource(R.string.call_active, details.peerName), style = MaterialTheme.typography.titleLarge)
+                    CallStatusLines(details)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = actions.onToggleMute) {
                             Text(stringResource(if (details.muted) R.string.btn_unmute else R.string.btn_mute))
@@ -367,10 +370,50 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
                         Button(onClick = actions.onCall, enabled = !busy) { Text(stringResource(R.string.btn_call)) }
                         OutlinedButton(onClick = actions.onPushToTalk, enabled = !busy) { Text(stringResource(R.string.btn_push_to_talk)) }
                     }
+                    endMessage(details)?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
                     if (micDenied) Text(text = stringResource(R.string.call_mic_denied), style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
+    }
+}
+
+/** The route, and a warning while nothing arrives from the other phone. */
+@Composable
+private fun CallStatusLines(details: LinkDetails) {
+    details.audioRoute?.let { r ->
+        val route = stringResource(
+            when (r) {
+                AudioRoute.EARPIECE -> R.string.route_earpiece
+                AudioRoute.SPEAKER -> R.string.route_speaker
+                AudioRoute.HEADSET -> R.string.route_headset
+            },
+        )
+        Text(text = stringResource(R.string.call_route, route), style = MaterialTheme.typography.bodySmall)
+    }
+    val s = details.media
+    if (s != null && s.signalLost) {
+        Text(
+            text = stringResource(R.string.call_signal_lost, details.peerName, (s.silentMs / 1000).toInt()),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+@Composable
+private fun endMessage(details: LinkDetails): String? {
+    val end = details.lastEnd ?: return null
+    val what = stringResource(if (details.lastEndKind == MediaKind.PTT) R.string.end_what_ptt else R.string.end_what_call)
+    val whatTitle = what.replaceFirstChar { it.titlecase(Locale.getDefault()) }
+    return when (end) {
+        MediaEnd.ENDED_HERE -> stringResource(R.string.end_here, whatTitle)
+        MediaEnd.ENDED_BY_PEER -> stringResource(R.string.end_by_peer, whatTitle, details.peerName)
+        MediaEnd.MISSED -> stringResource(R.string.end_missed, what, details.peerName)
+        MediaEnd.DECLINED_HERE -> stringResource(R.string.end_declined_here, whatTitle)
+        MediaEnd.DECLINED_BY_PEER -> stringResource(R.string.end_declined_by_peer, details.peerName, what)
+        MediaEnd.FAILED -> stringResource(R.string.end_failed, whatTitle)
+        MediaEnd.AUDIO_TAKEN -> stringResource(R.string.end_audio_taken, whatTitle)
     }
 }
 
@@ -379,6 +422,7 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
 private fun PushToTalkPanel(details: LinkDetails, actions: ConnectionActions) {
     val s = details.media
     Text(text = stringResource(R.string.ptt_active, details.peerName), style = MaterialTheme.typography.titleLarge)
+    CallStatusLines(details)
     val status = when {
         s?.talking == true && s.peerTalking -> stringResource(R.string.ptt_both_talking, details.peerName)
         s?.talking == true -> stringResource(R.string.ptt_you_talking)

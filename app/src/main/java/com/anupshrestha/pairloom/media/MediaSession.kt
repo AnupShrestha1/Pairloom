@@ -48,7 +48,19 @@ data class MediaStats(
     val codecDelayMs: Double = 0.0,
     /** Average time from a packet's arrival until its decoded frames were ready (0 for PCM). */
     val decodeDelayMs: Double = 0.0,
+    /**
+     * Time since the last authenticated packet of any kind (probes arrive every 200 ms even in
+     * push-to-talk silence), or since the start if none came yet.
+     */
+    val silentMs: Long = 0,
 ) {
+    /** Nothing has arrived for a second: the link is probably failing. */
+    val signalLost: Boolean get() = silentMs >= SIGNAL_LOST_MS
+
+    companion object {
+        const val SIGNAL_LOST_MS = 1_000L
+    }
+
     /**
      * One-way estimate: half the round trip, the codec's look-ahead and decoding time, the jitter
      * buffer's target playout delay (what playout converges to) and, for calls, the measured speaker delay plus one 10 ms microphone frame.
@@ -109,6 +121,7 @@ class MediaSession(
 
     @Volatile private var sendingSpurt = false
     @Volatile private var lastPeerFrameNanos = 0L
+    @Volatile private var lastRxNanos = 0L
 
     private val sealer = MediaSealer(sendKey)
     private val opener = MediaOpener(receiveKey)
@@ -203,6 +216,7 @@ class MediaSession(
             codec = codec,
             codecDelayMs = encoder.delayMs,
             decodeDelayMs = if (decodeCount == 0) 0.0 else decodeNanos / 1e6 / decodeCount,
+            silentMs = if (startNanos == 0L) 0 else (System.nanoTime() - maxOf(lastRxNanos, startNanos)) / 1_000_000,
         )
     }
 
@@ -324,6 +338,7 @@ class MediaSession(
                 continue
             }
             received.incrementAndGet()
+            lastRxNanos = now
             when (opened.header.kind) {
                 PacketKind.AUDIO -> onAudio(opened, now)
                 PacketKind.PROBE -> if (opened.payload.size == 8) pendingReplies.add(opened.payload)

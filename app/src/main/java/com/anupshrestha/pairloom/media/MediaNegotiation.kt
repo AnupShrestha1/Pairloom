@@ -28,6 +28,21 @@ enum class MediaKind(val code: Int) {
     }
 }
 
+/** Why a media session (or an attempt at one) ended, for the user. */
+enum class MediaEnd {
+    /** This phone's user ended or cancelled it. */
+    ENDED_HERE,
+    ENDED_BY_PEER,
+    /** The other phone ended it before it was answered here (a missed call). */
+    MISSED,
+    DECLINED_HERE,
+    DECLINED_BY_PEER,
+    /** Opening the audio or codec failed on one of the phones. */
+    FAILED,
+    /** Another app or a phone call took the audio (set by the caller of [MediaNegotiation.stop]). */
+    AUDIO_TAKEN,
+}
+
 /**
  * Starts and stops media sessions over the authenticated control channel.
  *
@@ -50,6 +65,8 @@ class MediaNegotiation(
     /** Codecs this phone can use for voice now, as an [AudioCodec] bit mask (PCM is always added). */
     private val localCodecs: () -> Int = { AudioCodec.PCM.bit },
     private val log: (String) -> Unit = {},
+    /** Called (with the lock held, so keep it short) when a session or an attempt ends. Not on [close]. */
+    private val onEnded: (MediaKind, MediaEnd) -> Unit = { _, _ -> },
     private val random: SecureRandom = SecureRandom(),
 ) {
     private class Offer(val kind: MediaKind, val codecs: Int, val socket: DatagramSocket, val key: DirectionKey)
@@ -108,19 +125,26 @@ class MediaNegotiation(
     /** The local user declines the waiting offer. */
     @Synchronized
     fun decline() {
-        if (incoming == null) return
+        val m = incoming ?: return
         incoming = null
         log("Media: declined the other phone's call")
         runCatching { send(Message.MediaStop) }
+        MediaKind.fromCode(m.kind)?.let { onEnded(it, MediaEnd.DECLINED_HERE) }
     }
 
     /** The user stops the session (or cancels an offer); tells the peer. */
     @Synchronized
-    fun stop() {
-        val wasActive = session != null || offer != null || incoming != null
+    fun stop(reason: MediaEnd = MediaEnd.ENDED_HERE) {
+        val ending = currentKind()
         close()
-        if (wasActive) runCatching { send(Message.MediaStop) }
+        if (ending != null) {
+            runCatching { send(Message.MediaStop) }
+            onEnded(ending, reason)
+        }
     }
+
+    /** The kind of the session, offer or waiting call, if any. */
+    private fun currentKind(): MediaKind? = kind ?: offer?.kind ?: incoming?.let { MediaKind.fromCode(it.kind) }
 
     /** Ends everything without telling the peer (link teardown). */
     @Synchronized
@@ -143,7 +167,14 @@ class MediaNegotiation(
             is Message.MediaAnswer -> onAnswer(message)
             Message.MediaStop -> {
                 log("Media: the other phone ended the session")
+                val reason = when {
+                    offer != null -> MediaEnd.DECLINED_BY_PEER
+                    incoming != null -> MediaEnd.MISSED
+                    else -> MediaEnd.ENDED_BY_PEER
+                }
+                val ending = currentKind()
                 close()
+                ending?.let { onEnded(it, reason) }
             }
             else -> Unit
         }
@@ -196,6 +227,7 @@ class MediaNegotiation(
             pending.socket.close()
             log("Media: the answer chose codec ${m.codec}, which was not offered")
             runCatching { send(Message.MediaStop) }
+            onEnded(pending.kind, MediaEnd.FAILED)
             return
         }
         begin(pending.kind, chosen, pending.socket, m.port, pending.key, peerKey)
@@ -210,6 +242,7 @@ class MediaNegotiation(
                 socket.close()
                 log("Media: could not start ($k, $c): ${e.message}")
                 runCatching { send(Message.MediaStop) }
+                onEnded(k, MediaEnd.FAILED)
                 return
             }
             session = s
