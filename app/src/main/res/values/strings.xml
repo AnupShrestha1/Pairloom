@@ -104,6 +104,14 @@
     <string name="ptt_peer_talking">%1$s is talking</string>
     <string name="ptt_both_talking">You and %1$s are both talking</string>
     <string name="ptt_quiet">Nobody is talking</string>
+    <string name="home_paired_title">Your phones</string>
+    <string name="btn_connect">Connect</string>
+    <string name="btn_be_ready">Be ready</string>
+    <string name="home_paired_hint">Tap Be ready on one phone, then Connect on the other.</string>
+    <string name="home_paired_hint_first">Tap Be ready on one phone, then Connect on the other and pick %1$s. After this link, Connect works without any prompt.</string>
+    <string name="home_new_title">Connect two phones</string>
+    <string name="home_new_title_more">Pair another phone</string>
+    <string name="home_new_steps">1. Open Pairloom on both phones and keep them close.\n2. Tap Host on one phone and Join on the other, then pick the first phone.\n3. Accept the connection prompt if one appears, and check that both phones show the same 6-digit code.</string>
     <string name="btn_show_details">Show details</string>
     <string name="btn_hide_details">Hide details</string>
     <string name="join_direct_title">Paired phones</string>

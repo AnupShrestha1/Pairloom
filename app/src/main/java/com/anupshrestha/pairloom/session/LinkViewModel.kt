@@ -289,6 +289,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** A direct join waiting for the join screen to open ([connectPaired]). */
+    @Volatile private var pendingDirectJoin: String? = null
+
+    /** Home screen "Connect": opens the join side, then joins that paired phone directly. */
+    fun connectPaired(fingerprintHex: String) {
+        pendingDirectJoin = fingerprintHex
+        start(Role.JOIN) // the join runs once discovery has started; setLink drops it if starting fails
+    }
+
     /** Whether [group] is the one the user chose: by owner address, or by name for a direct join. */
     private fun inChosenGroup(group: GroupSnapshot?): Boolean {
         targetGroupName?.let { name -> return group != null && !group.isGroupOwner && group.networkName == name }
@@ -702,6 +711,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 result.ok -> {
                     log("Peer discovery started")
                     armDiscoveryHint(gen)
+                    // A home-screen Connect joins only now: the stale-state cleanup before discovery
+                    // cancels connections, and it once cancelled a join that started too early.
+                    pendingDirectJoin?.let { fp ->
+                        pendingDirectJoin = null
+                        joinPaired(fp)
+                    }
                 }
 
                 result.reason == WifiP2pManager.BUSY && attempt < MAX_BUSY_RETRIES ->
@@ -1247,6 +1262,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun setLink(state: LinkState) {
         _ui.update { it.copy(link = state) }
+        if (!state.isActive) pendingDirectJoin = null
     }
 
     private fun refreshLocation() {

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark window background before Compose draws, so dark mode does not flash white at start. -->
+    <style name="Theme.Pairloom" parent="android:Theme.Material.NoActionBar" />
+</resources>

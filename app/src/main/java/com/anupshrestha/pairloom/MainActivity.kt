@@ -29,16 +29,16 @@ import com.anupshrestha.pairloom.ui.theme.PairloomTheme
 class MainActivity : ComponentActivity() {
     private val viewModel: LinkViewModel by viewModels()
 
-    /** The role the user tapped, remembered while the permission dialog is showing. */
-    private var pendingRole: Role? = null
+    /** What the user tapped, run once the permission dialog has been answered with a grant. */
+    private var pendingStart: (() -> Unit)? = null
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            val role = pendingRole
-            pendingRole = null
+            val action = pendingStart
+            pendingStart = null
             val missing = P2pPermissions.missing(this)
             if (missing.isEmpty()) {
-                if (role != null) viewModel.start(role)
+                action?.invoke()
             } else {
                 // After a request, a permission that is still missing and that Android will not
                 // explain again has been permanently denied ("don't ask again").
@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
             onTalk = viewModel::setTalking,
             onToggleOpus = viewModel::toggleOpus,
             onJoinPaired = viewModel::joinPaired,
+            onConnectPaired = { fp -> requestThen { viewModel.connectPaired(fp) } },
         )
         setContent {
             PairloomTheme {
@@ -122,12 +123,14 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Permissions are requested only when the user starts a session, never at launch. */
-    private fun requestAndStart(role: Role) {
+    private fun requestAndStart(role: Role) = requestThen { viewModel.start(role) }
+
+    private fun requestThen(action: () -> Unit) {
         val missing = P2pPermissions.missing(this)
         if (missing.isEmpty()) {
-            viewModel.start(role)
+            action()
         } else {
-            pendingRole = role
+            pendingStart = action
             permissionLauncher.launch(missing.toTypedArray())
         }
     }

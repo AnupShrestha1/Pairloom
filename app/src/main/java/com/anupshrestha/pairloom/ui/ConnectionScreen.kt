@@ -19,6 +19,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -75,6 +76,8 @@ class ConnectionActions(
     val onToggleOpus: () -> Unit,
     /** Join a paired phone's group directly (by key fingerprint). */
     val onJoinPaired: (String) -> Unit,
+    /** From the home screen: connect to a paired phone that is ready (by key fingerprint). */
+    val onConnectPaired: (String) -> Unit,
 )
 
 @Composable
@@ -95,19 +98,16 @@ fun ConnectionScreen(
         Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
         Text(text = stringResource(R.string.home_tagline), style = MaterialTheme.typography.bodyMedium)
 
-        StatusCard(link)
+        if (link !is LinkState.Idle) StatusCard(link)
 
         if (ui.cleaningUp) {
             Text(text = stringResource(R.string.cleaning_up), style = MaterialTheme.typography.bodySmall)
         }
 
         val canStart = !link.isActive && !ui.cleaningUp
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = actions.onHost, enabled = canStart) { Text(stringResource(R.string.btn_host)) }
-            Button(onClick = actions.onJoin, enabled = canStart) { Text(stringResource(R.string.btn_join)) }
-        }
-        if (link is LinkState.Idle) {
-            Text(text = stringResource(R.string.role_hint), style = MaterialTheme.typography.bodySmall)
+        if (!link.isActive) {
+            PairedPhonesHome(ui, canStart, actions)
+            NewPhoneCard(hasPaired = ui.pairedDevices.isNotEmpty(), canStart = canStart, actions = actions)
         }
 
         when (link) {
@@ -133,7 +133,7 @@ fun ConnectionScreen(
             else -> Unit
         }
 
-        if (!link.isActive && !ui.cleaningUp) PairedDevicesCard(ui, actions)
+        if (showDetails && !link.isActive && !ui.cleaningUp) PairedDevicesCard(ui, actions)
 
         if (ui.locationHint) {
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -151,12 +151,14 @@ fun ConnectionScreen(
             OutlinedButton(onClick = actions.onDisconnect) { Text(stringResource(label)) }
         }
 
-        Text(
-            text = stringResource(
-                if (ui.locationServicesOn) R.string.location_status_on else R.string.location_status_off,
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
+        if (showDetails) {
+            Text(
+                text = stringResource(
+                    if (ui.locationServicesOn) R.string.location_status_on else R.string.location_status_off,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
         // Link statistics, the media test and the event log are for diagnosis, and redrawing them
         // twice a second during a call cost noticeable CPU on the A03s: hidden unless asked for.
@@ -164,6 +166,54 @@ fun ConnectionScreen(
             Text(stringResource(if (showDetails) R.string.btn_hide_details else R.string.btn_show_details))
         }
         if (showDetails) LogCard(ui.log)
+    }
+}
+
+/** Home: one card per paired phone, with "Connect" and "Be ready". */
+@Composable
+private fun PairedPhonesHome(ui: LinkUiState, canStart: Boolean, actions: ConnectionActions) {
+    if (ui.pairedDevices.isEmpty()) return
+    Text(text = stringResource(R.string.home_paired_title), style = MaterialTheme.typography.titleMedium)
+    ui.pairedDevices.forEach { d ->
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(text = d.name, style = MaterialTheme.typography.titleLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = { if (d.canJoinDirectly) actions.onConnectPaired(d.fingerprintHex) else actions.onJoin() },
+                        enabled = canStart,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) { Text(stringResource(R.string.btn_connect)) }
+                    OutlinedButton(
+                        onClick = actions.onHost,
+                        enabled = canStart,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                    ) { Text(stringResource(R.string.btn_be_ready)) }
+                }
+                Text(
+                    text = stringResource(if (d.canJoinDirectly) R.string.home_paired_hint else R.string.home_paired_hint_first, d.name),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+/** How to pair a new phone: Host on one, Join on the other, compare the code. */
+@Composable
+private fun NewPhoneCard(hasPaired: Boolean, canStart: Boolean, actions: ConnectionActions) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = stringResource(if (hasPaired) R.string.home_new_title_more else R.string.home_new_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(text = stringResource(R.string.home_new_steps), style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = actions.onHost, enabled = canStart) { Text(stringResource(R.string.btn_host)) }
+                Button(onClick = actions.onJoin, enabled = canStart) { Text(stringResource(R.string.btn_join)) }
+            }
+        }
     }
 }
 
@@ -389,8 +439,12 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
                 }
                 else -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = actions.onCall, enabled = !busy) { Text(stringResource(R.string.btn_call)) }
-                        OutlinedButton(onClick = actions.onPushToTalk, enabled = !busy) { Text(stringResource(R.string.btn_push_to_talk)) }
+                        Button(onClick = actions.onCall, enabled = !busy, modifier = Modifier.weight(1f).height(64.dp)) {
+                            Text(stringResource(R.string.btn_call), style = MaterialTheme.typography.titleMedium)
+                        }
+                        FilledTonalButton(onClick = actions.onPushToTalk, enabled = !busy, modifier = Modifier.weight(1f).height(64.dp)) {
+                            Text(stringResource(R.string.btn_push_to_talk), style = MaterialTheme.typography.titleMedium)
+                        }
                     }
                     endMessage(details)?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
                     if (micDenied) Text(text = stringResource(R.string.call_mic_denied), style = MaterialTheme.typography.bodySmall)

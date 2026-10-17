@@ -55,3 +55,23 @@ interrupting phone call) carry over and are done in R5.
 - Phones with Android 8-11, if any are available (R5).
 - Unplugged phones for the battery run, a headset, and a phone call to one of the phones (R5).
 - A Google Play developer account, an upload key, and where to host the privacy policy (R4, R6).
+
+## R2 results (2026-10-17)
+- **Home** lists the paired phones, each with **Connect** and **Be ready**. Be ready hosts. Connect
+  opens the join side and, once discovery has started, joins that phone directly, with no prompt
+  on the host.
+  - The first version joined as soon as the join screen opened. The joiner's stale-state cleanup
+    (which cancels connections) then cancelled the join once. The join now waits until discovery
+    has started.
+  - For a phone paired before direct join existed, Connect falls back to the normal Join list.
+    After one link it works directly.
+- **Pair another phone** explains the Host / Join steps and the code check.
+- **Linked** shows large Call and Push-to-talk buttons. Link statistics, the media test, paired-phone
+  keys, location status and the event log are under "Show details".
+- **Look**: themed (monochrome) launcher icon for Android 13+, teal brand colours where dynamic
+  colour is unavailable (Android 8-11), and a dark window background in dark mode (no white flash
+  at start).
+- Device check, A03s "Be ready" and Redmi "Connect", 3 runs: linked every time in about 9 s, the
+  script's polling included, with no host prompt. No crashes.
+- Not done: automatic roles. "Be ready" on one phone is still needed. Picking roles automatically
+  would need each phone to see the other's group before linking. Revisit after R3.
