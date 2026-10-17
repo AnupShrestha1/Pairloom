@@ -87,6 +87,21 @@ numeric-comparison argument, with TLS providing the key-possession proof.
 - The user can forget a paired phone. That is the only way to pair again with a phone whose
   identity changed.
 
+### Direct join of paired phones (added in Phase 3)
+- Each phone keeps its own Wi-Fi Direct group name and passphrase (16 random alphanumeric
+  characters, about 95 bits) in `noBackupFilesDir`. It hosts with them instead of fresh random ones
+  each time.
+- After a link is authenticated (mutual TLS with a paired key), each phone sends its group to the
+  other (GROUP_INFO, control protocol version 5, inside TLS only). The receiver stores it with that
+  paired phone's record (paired-device file format v2). Values that are not in Pairloom's own
+  format (`DIRECT-xx-Pairloom`, 8-63 alphanumerics) are rejected on the wire and in storage.
+- "Join <name> directly" then joins that group by name and passphrase, so the host shows no system
+  connection prompt. The passphrase only admits a phone to the Wi-Fi Direct group. The control
+  link is still mutual TLS against the pinned key, and media is still authenticated per packet.
+- Forgetting a paired phone replaces this phone's group, so the forgotten phone can no longer join
+  directly. The remaining paired phones receive the new group on their next link.
+- The passphrase is never logged or shown (`toString` hides it everywhere).
+
 ## Residual risks and limits
 - `DIGEST_NONE` widens what the key can sign for code running as the app; accepted because the
   key is single-purpose (see Identity).
@@ -95,3 +110,6 @@ numeric-comparison argument, with TLS providing the key-possession proof.
 - Certificate validity dates are not enforced; trust is the pinned key alone.
 - API 26-28 (no TLS 1.3) and API 29-30 are not covered by the test phones.
 - The 6-digit comparison only protects users who actually compare the codes.
+- Group passphrases are stored unencrypted in app-private, no-backup storage. A phone that has
+  them (a paired phone, or anyone who extracts them from a rooted device) can join the Wi-Fi Direct
+  group while it is up. It can disturb the link, but cannot pass TLS or forge media.

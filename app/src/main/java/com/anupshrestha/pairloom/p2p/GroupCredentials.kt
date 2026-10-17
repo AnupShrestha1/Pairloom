@@ -4,11 +4,13 @@ import java.security.SecureRandom
 import java.util.Random
 
 /**
- * Random, single-use credentials for a host's non-persistent Wi-Fi Direct group.
+ * Credentials for this phone's Wi-Fi Direct group when it hosts.
  *
- * They exist only for the duration of one createGroup call. The joining phone never needs them:
- * Android hands them over in its own Wi-Fi Direct handshake once the host accepts.
- * [toString] hides the passphrase so it cannot end up in a log by accident.
+ * They are random, kept in app-private storage that is never backed up ([GroupCredentialStore]),
+ * and given only to authenticated, paired phones, inside the TLS link, so that those phones can
+ * join directly without the system's connection prompt. Any other phone still joins by asking, and
+ * the host's user accepts. They are replaced when a paired phone is forgotten. The group itself
+ * stays non-persistent. [toString] hides the passphrase so it cannot end up in a log by accident.
  */
 class GroupCredentials(val networkName: String, val passphrase: String) {
     override fun toString(): String = "GroupCredentials(networkName=$networkName, passphrase=<hidden>)"
@@ -27,6 +29,13 @@ class GroupCredentials(val networkName: String, val passphrase: String) {
             val networkName = "DIRECT-" + randomString(random, 2) + "-Pairloom"
             return GroupCredentials(networkName, randomString(random, PASSPHRASE_LENGTH))
         }
+
+        private val NAME = Regex("DIRECT-[A-Za-z0-9]{2}-Pairloom")
+        private val PASSPHRASE = Regex("[A-Za-z0-9]{8,63}")
+
+        /** Only groups in Pairloom's own format are accepted from the other phone. */
+        fun isValid(networkName: String, passphrase: String): Boolean =
+            NAME.matches(networkName) && PASSPHRASE.matches(passphrase)
 
         private fun randomString(random: Random, length: Int): String =
             buildString(length) { repeat(length) { append(ALPHANUMERIC[random.nextInt(ALPHANUMERIC.length)]) } }

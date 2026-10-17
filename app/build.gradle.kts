@@ -23,6 +23,13 @@ android {
                 "proguard-rules.pro"
             )
         }
+        // Release code, not debuggable, signed with the debug key: for measuring CPU and battery on
+        // the test phones (a debuggable build runs largely in the interpreter). Not for publishing.
+        create("profile") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 
     compileOptions {

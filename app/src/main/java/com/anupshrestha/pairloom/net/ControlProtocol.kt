@@ -1,5 +1,7 @@
 package com.anupshrestha.pairloom.net
 
+import com.anupshrestha.pairloom.p2p.GroupCredentials
+
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -16,7 +18,7 @@ import java.io.InputStream
  */
 object ControlProtocol {
     const val MAGIC = "PLM1"
-    const val VERSION = 4
+    const val VERSION = 5
     const val MAX_FRAME_BODY = 256
     const val MAX_NAME_BYTES = 64
     const val INSTALL_ID_BYTES = 16
@@ -34,6 +36,7 @@ object ControlProtocol {
     private const val TYPE_MEDIA_OFFER = 10
     private const val TYPE_MEDIA_ANSWER = 11
     private const val TYPE_MEDIA_STOP = 12
+    private const val TYPE_GROUP_INFO = 13
 
     const val MEDIA_KEY_BYTES = 32
     const val MEDIA_SALT_BYTES = 4
@@ -73,6 +76,15 @@ object ControlProtocol {
 
         /** Ends the media session. */
         data object MediaStop : Message
+
+        /**
+         * The sender's own Wi-Fi Direct group name and passphrase, so that the receiver (an
+         * authenticated, paired phone) can later join the sender's group directly, without the
+         * system's connection prompt. Only ever sent inside the TLS channel.
+         */
+        data class GroupInfo(val networkName: String, val passphrase: String) : Message {
+            override fun toString(): String = "GroupInfo(networkName=$networkName, passphrase=<hidden>)"
+        }
     }
 
     /** The peer sent something that is not valid protocol data. */
@@ -152,6 +164,16 @@ object ControlProtocol {
             }
 
             Message.MediaStop -> out.writeByte(TYPE_MEDIA_STOP)
+
+            is Message.GroupInfo -> {
+                require(GroupCredentials.isValid(message.networkName, message.passphrase)) { "invalid group credentials" }
+                out.writeByte(TYPE_GROUP_INFO)
+                for (v in listOf(message.networkName, message.passphrase)) {
+                    val bytes = v.toByteArray(Charsets.US_ASCII)
+                    out.writeByte(bytes.size)
+                    out.write(bytes)
+                }
+            }
         }
         val bytes = body.toByteArray()
         val frame = ByteArrayOutputStream(4 + bytes.size)
@@ -225,6 +247,14 @@ object ControlProtocol {
                 Message.MediaStop
             }
 
+            TYPE_GROUP_INFO -> {
+                val name = readShortAscii(payload, 0, "GROUP_INFO")
+                val pass = readShortAscii(payload, 1 + name.length, "GROUP_INFO")
+                if (2 + name.length + pass.length != payload.size) throw ProtocolException("GROUP_INFO has trailing bytes")
+                if (!GroupCredentials.isValid(name, pass)) throw ProtocolException("GROUP_INFO is not a valid group")
+                Message.GroupInfo(name, pass)
+            }
+
             TYPE_CONFIRM -> {
                 if (payload.size != 1 || (payload[0].toInt() and 0xFF) > 1) throw ProtocolException("CONFIRM must be 0 or 1")
                 Message.Confirm(payload[0].toInt() == 1)
@@ -260,6 +290,16 @@ object ControlProtocol {
         }
         val data = DataInputStream(payload.inputStream())
         return data.readInt() to data.readLong()
+    }
+
+    /** A one-byte length then that many ASCII bytes, starting at [offset]. */
+    private fun readShortAscii(payload: ByteArray, offset: Int, what: String): String {
+        if (offset >= payload.size) throw ProtocolException("$what is too short")
+        val n = payload[offset].toInt() and 0xFF
+        if (offset + 1 + n > payload.size) throw ProtocolException("$what is too short")
+        val bytes = payload.copyOfRange(offset + 1, offset + 1 + n)
+        if (bytes.any { it < 0x21 || it > 0x7E }) throw ProtocolException("$what is not printable ASCII")
+        return String(bytes, Charsets.US_ASCII)
     }
 
     private fun decodeFixed(payload: ByteArray, size: Int, what: String): String {

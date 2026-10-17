@@ -1,5 +1,7 @@
 package com.anupshrestha.pairloom.session
 
+import com.anupshrestha.pairloom.p2p.GroupCredentialStore
+import com.anupshrestha.pairloom.p2p.GroupCredentials
 import android.app.Application
 import android.content.Context
 import android.location.LocationManager
@@ -101,6 +103,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     // Join-side fallback bookkeeping (see JoinFallback).
     private var fallbackUsed = false
     private var targetPeerAddress: String? = null
+
+    /** For a direct join of a paired phone: the group name to expect instead of an owner address. */
+    private var targetGroupName: String? = null
+
+    /** Key fingerprint of the phone on the current link (for storing its group). */
+    @Volatile private var linkedPeerFingerprint: String? = null
     private var clientSinceMs: Long? = null
     private var groupPollJob: Job? = null
 
@@ -115,7 +123,14 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var sockets = SocketRegistry()
 
     /** This phone's identity, install ID and paired phones; loaded once off the main thread. */
-    private class Security(val identity: Identity, val installId: String, val store: PairedDeviceStore)
+    private class Security(
+        val identity: Identity,
+        val installId: String,
+        val store: PairedDeviceStore,
+        val groupStore: GroupCredentialStore,
+        /** This phone's own group credentials, used when hosting and sent to paired phones. */
+        @Volatile var ownGroup: GroupCredentials,
+    )
 
     @Volatile private var security: Security? = null
     private var securityError: String? = null
@@ -128,10 +143,13 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             val loaded = withContext(Dispatchers.IO) {
                 runCatching {
                     val dir = app.noBackupFilesDir
+                    val groupStore = GroupCredentialStore(File(dir, "group-credentials"))
                     Security(
                         identity = DeviceIdentity.getOrCreate(),
                         installId = InstallId.getOrCreate(File(dir, "install-id")),
                         store = PairedDeviceStore(File(dir, "paired-devices")),
+                        groupStore = groupStore,
+                        ownGroup = groupStore.get(),
                     )
                 }
             }
@@ -205,6 +223,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         discoveryHintJob?.cancel()
         requestedAtMs = SystemClock.elapsedRealtime()
         targetPeerAddress = peer.address
+        targetGroupName = null
         setLink(LinkState.Connecting(peer.name))
         log("Connecting to ${peer.name} (${peer.address}); the other phone may show an accept prompt")
         // Discovery is deliberately not stopped first: on some phones (observed on the Galaxy A03s)
@@ -219,6 +238,62 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 fail(FailureKind.CONNECT_TIMEOUT, null)
             }
         }
+    }
+
+    /**
+     * Joins a paired phone's group directly with the credentials it sent on an earlier link, so the
+     * host shows no connection prompt. The host must already be hosting. TLS still checks the key.
+     */
+    fun joinPaired(fingerprintHex: String) {
+        val c = controller ?: return
+        val sec = security ?: return
+        if (_ui.value.link !is LinkState.Discovering) {
+            log("Ignored direct join: not in the join screen")
+            return
+        }
+        val gen = generation
+        viewModelScope.launch {
+            val device = withContext(Dispatchers.IO) { runCatching { sec.store.load() }.getOrNull() }
+                ?.firstOrNull { it.fingerprintHex == fingerprintHex }
+            val name = device?.groupName
+            val pass = device?.groupPassphrase
+            if (gen != generation || _ui.value.link !is LinkState.Discovering) return@launch
+            if (device == null || name == null || pass == null) {
+                log("No group known for that phone; pick it from the list instead")
+                return@launch
+            }
+            discoveryHintJob?.cancel()
+            requestedAtMs = SystemClock.elapsedRealtime()
+            targetPeerAddress = null
+            targetGroupName = name
+            setLink(LinkState.Connecting(device.name))
+            log("Joining ${device.name} directly (group $name); no prompt on the other phone")
+            val target = PeerInfo(device.name, "", WifiP2pDevice.AVAILABLE, isPhone = true)
+            c.connectToGroup(GroupCredentials(name, pass)) { result ->
+                if (gen != generation) return@connectToGroup
+                if (result.ok) {
+                    log("Direct join accepted by the system; waiting for the group to form")
+                    startGroupPoll(target, gen)
+                } else {
+                    onOperationFailed("connect(group)", result)
+                }
+            }
+            timeoutJob?.cancel()
+            timeoutJob = viewModelScope.launch {
+                delay(CONNECT_TIMEOUT_MS)
+                if (gen == generation && _ui.value.link is LinkState.Connecting) {
+                    log("Direct join timed out after ${CONNECT_TIMEOUT_MS / 1000} s (is the other phone hosting?)")
+                    fail(FailureKind.CONNECT_TIMEOUT, null)
+                }
+            }
+        }
+    }
+
+    /** Whether [group] is the one the user chose: by owner address, or by name for a direct join. */
+    private fun inChosenGroup(group: GroupSnapshot?): Boolean {
+        targetGroupName?.let { name -> return group != null && !group.isGroupOwner && group.networkName == name }
+        val peer = targetPeerAddress ?: return false
+        return JoinFallback.isClientOfPeer(group, peer)
     }
 
     private fun connect(peer: PeerInfo, gen: Int, attempt: Int) {
@@ -260,12 +335,13 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun onGroupPolled(group: GroupSnapshot?, peer: PeerInfo, gen: Int) {
         if (gen != generation || socketsStarted || _ui.value.link !is LinkState.Connecting) return
         val now = SystemClock.elapsedRealtime()
-        if (JoinFallback.isClientOfPeer(group, peer.address)) {
+        if (inChosenGroup(group)) {
             if (clientSinceMs == null) {
                 clientSinceMs = now
                 log("Android lists this phone as a client of ${peer.name} (group ${group?.networkName}, ${group?.frequencyMhz ?: "?"} MHz) but has not reported the group as formed yet")
             }
-            if (JoinFallback.shouldUse(group, peer.address, clientSinceMs, now)) useJoinFallback(gen)
+            val since = clientSinceMs
+            if (since != null && now - since >= JoinFallback.DEFAULT_GRACE_MS) useJoinFallback(gen)
         } else {
             if (clientSinceMs != null) log("This phone is no longer listed as a client of ${peer.name}")
             clientSinceMs = null
@@ -450,7 +526,21 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     /** Media-control messages arrive on the control channel's read thread. */
     private fun onMediaMessage(message: ControlProtocol.Message, gen: Int) {
         if (gen != generation) return
+        if (message is ControlProtocol.Message.GroupInfo) {
+            onGroupInfo(message)
+            return
+        }
         runCatching { media?.onMessage(message) }.onFailure { log("Media message failed: ${it.message}") }
+    }
+
+    /** The authenticated peer's group, for joining it directly next time (control read thread). */
+    private fun onGroupInfo(info: ControlProtocol.Message.GroupInfo) {
+        val sec = security ?: return
+        val peer = linkedPeerFingerprint ?: return
+        val stored = runCatching { sec.store.updateGroup(peer, info.networkName, info.passphrase) }
+        stored.onSuccess { if (it) log("Stored the other phone's group (${info.networkName}) for joining directly") }
+            .onFailure { log("Could not store the other phone's group: ${it.message}") }
+        refreshPaired()
     }
 
     private fun startMediaPoll(gen: Int) {
@@ -510,8 +600,16 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
-            val removed = withContext(Dispatchers.IO) { runCatching { sec.store.remove(fingerprintHex) } }
-            removed.onSuccess { if (it) log("Forgot the phone with key ${Fingerprints.short(fingerprintHex)}") }
+            val removed = withContext(Dispatchers.IO) {
+                runCatching {
+                    sec.store.remove(fingerprintHex).also { removed ->
+                        // The forgotten phone knew this phone's group: replace it, so that phone can no
+                        // longer join directly. Remaining paired phones get the new one on their next link.
+                        if (removed) sec.ownGroup = sec.groupStore.rotate()
+                    }
+                }
+            }
+            removed.onSuccess { if (it) log("Forgot the phone with key ${Fingerprints.short(fingerprintHex)}; this phone's group credentials were replaced") }
                 .onFailure { log("Could not forget the phone: ${it.message}") }
             refreshPaired()
         }
@@ -525,7 +623,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.update { s ->
                     s.copy(
                         pairedDevices = devices.sortedByDescending { it.pairedAtMs }
-                            .map { PairedDeviceUi(it.name, it.fingerprintHex, Fingerprints.short(it.fingerprintHex), it.pairedAtMs) },
+                            .map {
+                                PairedDeviceUi(
+                                    it.name, it.fingerprintHex, Fingerprints.short(it.fingerprintHex), it.pairedAtMs,
+                                    canJoinDirectly = it.groupName != null && Build.VERSION.SDK_INT >= 29,
+                                )
+                            },
                     )
                 }
             }.onFailure { log("Paired phones unreadable: ${it.message}") }
@@ -544,6 +647,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         linkedAtMs = 0
         fallbackUsed = false
         targetPeerAddress = null
+        targetGroupName = null
+        linkedPeerFingerprint = null
         clientSinceMs = null
         requestedAtMs = SystemClock.elapsedRealtime()
         _ui.update { it.copy(role = role, locationHint = false) }
@@ -576,7 +681,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun createGroup(gen: Int, attempt: Int) {
         val c = controller ?: return
         requestedAtMs = SystemClock.elapsedRealtime()
-        c.createGroup(staFrequencyMhz()) { result ->
+        val own = security?.ownGroup ?: GroupCredentials.generate()
+        c.createGroup(own, staFrequencyMhz()) { result ->
             if (gen != generation) return@createGroup
             when {
                 result.ok -> log("createGroup accepted by the system; waiting for the group to form")
@@ -699,8 +805,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 // trustworthy either. Only end the session if the group is really gone.
                 controller?.requestGroupInfo { group ->
                     if (gen != generation) return@requestGroupInfo
-                    val peer = targetPeerAddress
-                    if (peer != null && JoinFallback.isClientOfPeer(group, peer)) {
+                    if (inChosenGroup(group)) {
                         log("Ignoring a 'not formed' report: this phone is still in group ${group?.networkName}")
                     } else {
                         log("The Wi-Fi Direct group ended")
@@ -746,12 +851,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         c.requestGroupInfo { group ->
             if (gen != generation) return@requestGroupInfo
             val interfaceName = group?.interfaceName
-            val peer = targetPeerAddress
+            val chosen = targetPeerAddress != null || targetGroupName != null
             val problem = when {
                 group == null -> "Android reported no Wi-Fi Direct group"
                 interfaceName.isNullOrEmpty() -> "Android did not report the group's network interface"
                 group.isGroupOwner != isGroupOwner -> "Android's group info disagrees about which phone owns the group"
-                !isGroupOwner && peer != null && !JoinFallback.isClientOfPeer(group, peer) ->
+                !isGroupOwner && chosen && !inChosenGroup(group) ->
                     "this phone is not in the group of the phone that was chosen"
 
                 else -> null
@@ -1017,6 +1122,14 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         logStaState("linked")
         setLink(LinkState.Linked(details))
         if (details.newlyPaired) refreshPaired()
+        linkedPeerFingerprint = established.peer.fingerprintHex
+        // Tell the (authenticated, paired) peer this phone's group, so it can join directly later.
+        security?.ownGroup?.let { own ->
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { ch.sendMessage(ControlProtocol.Message.GroupInfo(own.networkName, own.passphrase)) }
+                    .onFailure { log("Could not send this phone's group: ${it.message}") }
+            }
+        }
         val local = LinkEndpoint.toIpv4(established.localAddress)
         val remote = LinkEndpoint.toIpv4(established.remoteAddress)
         if (local != null && remote != null) {
@@ -1109,6 +1222,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         eventsAccepted = false
         fallbackUsed = false
         targetPeerAddress = null
+        targetGroupName = null
+        linkedPeerFingerprint = null
         clientSinceMs = null
 
         // Closing may write (the BYE), so it happens off the main thread. The registry is marked

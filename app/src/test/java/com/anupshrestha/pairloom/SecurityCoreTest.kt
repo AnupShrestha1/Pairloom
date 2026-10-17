@@ -19,6 +19,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
+import com.anupshrestha.pairloom.p2p.GroupCredentialStore
+import com.anupshrestha.pairloom.p2p.GroupCredentials
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.math.BigInteger
@@ -180,12 +182,12 @@ class SecurityCoreTest {
         val file = dir.resolve("paired")
         val bad = listOf(
             "something else\n",
-            "${PairedDeviceStore.HEADER}\nnot\tenough\n",
-            "${PairedDeviceStore.HEADER}\n${"z".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\t1\n",
-            "${PairedDeviceStore.HEADER}\n${"a".repeat(64)}\t${"1".repeat(31)}\tbmFtZQ\t1\n",
-            "${PairedDeviceStore.HEADER}\n${"a".repeat(64)}\t${"1".repeat(32)}\t!!!\t1\n",
-            "${PairedDeviceStore.HEADER}\n${"a".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\tsoon\n",
-            "${PairedDeviceStore.HEADER}\n${"a".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\t1\n${"a".repeat(64)}\t${"2".repeat(32)}\tbmFtZQ\t1\n",
+            "${PairedDeviceStore.HEADER_V1}\nnot\tenough\n",
+            "${PairedDeviceStore.HEADER_V1}\n${"z".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\t1\n",
+            "${PairedDeviceStore.HEADER_V1}\n${"a".repeat(64)}\t${"1".repeat(31)}\tbmFtZQ\t1\n",
+            "${PairedDeviceStore.HEADER_V1}\n${"a".repeat(64)}\t${"1".repeat(32)}\t!!!\t1\n",
+            "${PairedDeviceStore.HEADER_V1}\n${"a".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\tsoon\n",
+            "${PairedDeviceStore.HEADER_V1}\n${"a".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\t1\n${"a".repeat(64)}\t${"2".repeat(32)}\tbmFtZQ\t1\n",
         )
         for (text in bad) {
             file.writeText(text)
@@ -263,5 +265,60 @@ class SecurityCoreTest {
         }
         val tm = PeerTrustManager()
         assertThrows(CertificateException::class.java) { tm.checkClientTrusted(null, "EC") }
+    }
+
+    // --- paired phones' groups (direct join) ----------------------------------------------------
+
+    private val group = GroupCredentials("DIRECT-ab-Pairloom", "Abcdefgh12345678")
+
+    @Test
+    fun pairedGroupsAreStoredAndVersionOneFilesStillLoad() {
+        val file = tmp.newFolder().resolve("paired")
+        val fp = "a".repeat(64)
+        // A version-1 file (no group columns) from an older build.
+        file.writeText("${PairedDeviceStore.HEADER_V1}\n$fp\t${"1".repeat(32)}\tbmFtZQ\t5\n")
+        val store = PairedDeviceStore(file)
+        assertEquals(null, store.load().single().groupName)
+        assertTrue(store.updateGroup(fp, group.networkName, group.passphrase))
+        assertFalse(store.updateGroup("b".repeat(64), group.networkName, group.passphrase)) // not paired
+        val d = PairedDeviceStore(file).load().single()
+        assertEquals("name", d.name)
+        assertEquals(group.networkName, d.groupName)
+        assertEquals(group.passphrase, d.groupPassphrase)
+        assertTrue(file.readText().startsWith(PairedDeviceStore.HEADER + "\n"))
+        assertFalse("passphrase must not appear in toString", d.toString().contains(group.passphrase))
+    }
+
+    @Test
+    fun aDamagedGroupColumnFailsClosed() {
+        val file = tmp.newFolder().resolve("paired")
+        val row = "${"a".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\t5"
+        for (cols in listOf("DIRECT-ab-Other\tAbcdefgh12345678", "DIRECT-ab-Pairloom\tshort", "DIRECT-ab-Pairloom\t-", "-")) {
+            file.writeText("${PairedDeviceStore.HEADER}\n$row\t$cols\n")
+            assertThrows(cols, TrustStoreException::class.java) { PairedDeviceStore(file).load() }
+        }
+    }
+
+    @Test
+    fun ownGroupCredentialsPersistRotateAndRecoverFromDamage() {
+        val file = tmp.newFolder().resolve("group")
+        val store = GroupCredentialStore(file)
+        val first = store.get()
+        assertTrue(GroupCredentials.isValid(first.networkName, first.passphrase))
+        assertEquals(first.passphrase, GroupCredentialStore(file).get().passphrase) // kept across restarts
+        val rotated = store.rotate()
+        assertNotEquals(first.passphrase, rotated.passphrase)
+        assertEquals(rotated.passphrase, GroupCredentialStore(file).get().passphrase)
+        file.writeText("garbage")
+        val fresh = GroupCredentialStore(file).get()
+        assertTrue(GroupCredentials.isValid(fresh.networkName, fresh.passphrase))
+    }
+
+    @Test
+    fun onlyPairloomGroupsAreValid() {
+        assertTrue(GroupCredentials.isValid("DIRECT-x9-Pairloom", "abcdefgh"))
+        assertFalse(GroupCredentials.isValid("DIRECT-x9-Printer", "abcdefgh"))
+        assertFalse(GroupCredentials.isValid("DIRECT-x9-Pairloom", "abc def gh"))
+        assertFalse(GroupCredentials.isValid("DIRECT-x9-Pairloom", "a".repeat(64)))
     }
 }

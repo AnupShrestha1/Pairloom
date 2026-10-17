@@ -294,6 +294,40 @@ script with the user's permission):
 | App killed on the A03s mid-call | Redmi warned after 3.3 s, then ended after 7.7 s: "The other phone stopped responding." |
 | Crashes | none |
 
+## A5 hardening, part 2 (2026-10-17)
+### Joining a paired phone without the system prompt
+Each phone hosts with its own stored group name and passphrase. It sends them to the other phone
+inside the authenticated TLS link (GROUP_INFO, protocol version 5), and the receiver stores them
+with that paired phone. The Join screen then offers "Join <name> directly", which connects by name
+and passphrase, so the host shows no "Invitation to connect" dialog. TLS still checks the pinned
+key. Forgetting a phone replaces this phone's group. Details are in
+`docs/security/phase2-secure-session.md`.
+
+| Run | Host prompt | Group formed after | Secure link after that |
+|---|---|---|---|
+| Direct join, debug build | none | 169 ms | 181 ms |
+| Direct join, profile build | none | 106 ms | 141 ms |
+
+### Long call and CPU
+- A 10-minute call (stopped early, planned 30) stayed up with no crash or drop. Concealed frames
+  stayed around 3 %. Battery could not be measured: both phones were on USB power.
+- CPU, sampled from /proc during a call. The debug build is debuggable and runs largely in the
+  ART interpreter (a simpleperf profile showed it), so it overstates the cost. A `profile` build type
+  (release code, not debuggable, debug-signed, for measuring only) gives the real figure. The
+  profile also showed the jitter buffer sorting 200 boxed values on every packet. It now keeps
+  transit times in a primitive ring and sorts only when the spread is read.
+
+| % of one core, 60 s of call | A03s (debug) | A03s (profile) | Redmi (debug) | Redmi (profile) |
+|---|---|---|---|---|
+| Whole app | 74 | 38 | 49 | 22 |
+| Main thread (UI) | 23 | 12 | 11 | 4 |
+| Media send | 19 | 10 | 11 | 7 |
+| Media receive | 23 | 8 | 19 | 6 |
+| Media playout | 3 | 2 | 3 | 2 |
+
+Still to do: the UI recomposes the call screen every 500 ms (12 % of a core on the A03s); a real
+battery figure off USB power; a real headset; an interrupting phone call.
+
 ## Risks
 - **Echo on speaker** on the low-end A03s: the platform AEC may be weak. Mitigation: earpiece
   default for full duplex, PTT for speaker use.

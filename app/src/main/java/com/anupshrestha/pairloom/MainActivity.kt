@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
             onPushToTalk = { withMicrophone(viewModel::startPushToTalk) },
             onTalk = viewModel::setTalking,
             onToggleOpus = viewModel::toggleOpus,
+            onJoinPaired = viewModel::joinPaired,
         )
         setContent {
             PairloomTheme {

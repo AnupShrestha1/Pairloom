@@ -126,7 +126,7 @@ class OpusEncoder(
     // receiver's delay spread and so in its buffer target; only the look-ahead is extra.
     override val delayMs: Double get() = Opus.LOOKAHEAD_MS
 
-    private val impl = object : AsyncCodec("pairloom-opus-enc", log) {
+    private val impl = object : AsyncCodec("pl-opus-enc", log) {
         override val codec: MediaCodec = MediaCodec.createEncoderByType(MIME)
         override fun onOutput(bytes: ByteArray, ptsUs: Long) = onPacket(bytes)
     }
@@ -176,7 +176,7 @@ class OpusDecoder(private val out: PcmFrameSink, private val log: (String) -> Un
     private val turnaround = Turnaround()
     private var oddOutputs = 0
 
-    private val impl = object : AsyncCodec("pairloom-opus-dec", log) {
+    private val impl = object : AsyncCodec("pl-opus-dec", log) {
         override val codec: MediaCodec = MediaCodec.createDecoderByType(MIME)
         override fun onOutput(bytes: ByteArray, ptsUs: Long) = onPcm(bytes, ptsUs)
     }

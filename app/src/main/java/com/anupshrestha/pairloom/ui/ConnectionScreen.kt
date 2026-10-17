@@ -44,6 +44,7 @@ import com.anupshrestha.pairloom.session.FailureKind
 import com.anupshrestha.pairloom.session.LinkDetails
 import com.anupshrestha.pairloom.session.LinkState
 import com.anupshrestha.pairloom.session.LinkUiState
+import com.anupshrestha.pairloom.session.PairedDeviceUi
 import com.anupshrestha.pairloom.session.PeerInfo
 import com.anupshrestha.pairloom.session.isActive
 import java.util.Locale
@@ -70,6 +71,8 @@ class ConnectionActions(
     /** The talk button was pressed (true) or released (false). */
     val onTalk: (Boolean) -> Unit,
     val onToggleOpus: () -> Unit,
+    /** Join a paired phone's group directly (by key fingerprint). */
+    val onJoinPaired: (String) -> Unit,
 )
 
 @Composable
@@ -115,7 +118,7 @@ fun ConnectionScreen(
                 Text(stringResource(R.string.btn_open_location_settings))
             }
 
-            is LinkState.Discovering -> DiscoveryList(link, actions)
+            is LinkState.Discovering -> DiscoveryList(link, ui.pairedDevices, actions)
             is LinkState.Pairing -> PairingCard(link, actions)
             is LinkState.Linked -> {
                 CallCard(link.details, ui.micDenied, actions)
@@ -242,8 +245,17 @@ private fun withDetail(message: String, detail: String?): String =
     if (detail.isNullOrBlank()) message else message + "\n" + stringResource(R.string.detail_format, detail)
 
 @Composable
-private fun DiscoveryList(state: LinkState.Discovering, actions: ConnectionActions) {
+private fun DiscoveryList(state: LinkState.Discovering, paired: List<PairedDeviceUi>, actions: ConnectionActions) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val direct = paired.filter { it.canJoinDirectly }
+        if (direct.isNotEmpty()) {
+            Text(text = stringResource(R.string.join_direct_title), style = MaterialTheme.typography.titleSmall)
+            direct.forEach { d ->
+                Button(onClick = { actions.onJoinPaired(d.fingerprintHex) }) { Text(stringResource(R.string.btn_join_direct, d.name)) }
+            }
+            Text(text = stringResource(R.string.join_direct_hint), style = MaterialTheme.typography.bodySmall)
+            HorizontalDivider()
+        }
         state.peers.forEach { peer ->
             Card(modifier = Modifier.fillMaxWidth().clickable { actions.onSelectPeer(peer) }) {
                 Column(Modifier.padding(12.dp)) {

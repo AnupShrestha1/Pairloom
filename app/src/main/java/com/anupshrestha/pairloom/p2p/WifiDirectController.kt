@@ -139,12 +139,13 @@ class WifiDirectController(
      * Creates a group with this phone as owner.
      *
      * On Android 10+ the group is named and non-persistent, so Android does not save it and cannot
-     * later restart it in the wrong role. The random credentials only exist in this call: they are
-     * never shown or logged, and the joining phone receives them through Android's own Wi-Fi Direct
-     * handshake after the user accepts. If Android rejects the named group (for a reason other than
-     * being busy), this falls back to the platform's default group.
+     * later restart it in the wrong role. It uses this phone's own [credentials]
+     * ([GroupCredentialStore]): never shown or logged, and known only to paired phones, which can
+     * then join directly. Any other phone receives them through Android's own Wi-Fi Direct handshake
+     * after the user accepts. If Android rejects the named group (for a reason other than being
+     * busy), this falls back to the platform's default group.
      */
-    fun createGroup(preferredFrequencyMhz: Int? = null, done: (P2pResult) -> Unit) {
+    fun createGroup(credentials: GroupCredentials, preferredFrequencyMhz: Int? = null, done: (P2pResult) -> Unit) {
         if (Build.VERSION.SDK_INT < 29) {
             createDefaultGroup(done)
             return
@@ -153,7 +154,6 @@ class WifiDirectController(
         // multi-channel time sharing, which delivers packets in bursts (measured in milestone A1).
         val frequency = preferredFrequencyMhz?.takeIf { it in 2412..2484 || it in 5160..5885 }
         val config = try {
-            val credentials = GroupCredentials.generate()
             WifiP2pConfig.Builder()
                 .setNetworkName(credentials.networkName)
                 .setPassphrase(credentials.passphrase)
@@ -164,7 +164,7 @@ class WifiDirectController(
         } catch (e: IllegalArgumentException) {
             if (frequency != null) {
                 log("Group config for $frequency MHz rejected (${e.message}); trying without a fixed channel")
-                createGroup(null, done)
+                createGroup(credentials, null, done)
                 return
             }
             log("Named group config rejected (${e.message}); using the default group")
@@ -182,7 +182,7 @@ class WifiDirectController(
                 done(result)
             } else if (frequency != null) {
                 log("The group on $frequency MHz was refused; trying without a fixed channel")
-                createGroup(null, done)
+                createGroup(credentials, null, done)
             } else {
                 log("Named group was refused; falling back to the default group")
                 createDefaultGroup(done)
@@ -214,6 +214,30 @@ class WifiDirectController(
      */
     fun connect(address: String, done: (P2pResult) -> Unit) = request("connect", done) { m, ch, l ->
         m.connect(ch, connectConfig(address), l)
+    }
+
+    /**
+     * Joins a paired phone's group directly with its name and passphrase (Android 10+). The host
+     * shows no prompt: knowing the passphrase is the permission. Which phone answers is still
+     * checked by TLS against the paired key.
+     */
+    fun connectToGroup(credentials: GroupCredentials, done: (P2pResult) -> Unit) {
+        if (Build.VERSION.SDK_INT < 29) {
+            done(P2pResult(false, WifiP2pManager.ERROR))
+            return
+        }
+        val config = try {
+            WifiP2pConfig.Builder()
+                .setNetworkName(credentials.networkName)
+                .setPassphrase(credentials.passphrase)
+                .enablePersistentMode(false)
+                .build()
+        } catch (e: IllegalArgumentException) {
+            log("Group join config rejected (${e.message})")
+            done(P2pResult(false, WifiP2pManager.ERROR))
+            return
+        }
+        request("connect(group ${credentials.networkName})", done) { m, ch, l -> m.connect(ch, config, l) }
     }
 
     private fun connectConfig(address: String): WifiP2pConfig {

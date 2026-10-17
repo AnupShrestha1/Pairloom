@@ -104,6 +104,9 @@
     <string name="ptt_peer_talking">%1$s is talking</string>
     <string name="ptt_both_talking">You and %1$s are both talking</string>
     <string name="ptt_quiet">Nobody is talking</string>
+    <string name="join_direct_title">Paired phones</string>
+    <string name="btn_join_direct">Join %1$s directly</string>
+    <string name="join_direct_hint">The other phone must be hosting. No connection prompt appears there. Or pick a phone from the list below.</string>
     <string name="call_route">Audio: %1$s</string>
     <string name="route_earpiece">earpiece</string>
     <string name="route_speaker">loudspeaker</string>

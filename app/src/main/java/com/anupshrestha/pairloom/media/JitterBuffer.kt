@@ -53,13 +53,31 @@ class JitterBuffer(
     private var playing = false
     private var nextIndex = 0L
     private var consecutiveMissing = 0
-    private var lastArrival: Pair<Long, Long>? = null // (index, arrival nanos)
-    private val transits = ArrayDeque<Long>()
+    private var lastIndex = -1L
+    private var lastArrivalNanos = 0L
+
+    // Transit times of the last [windowFrames] frames in a ring of primitive longs (sorting boxed
+    // values on every packet showed up in a profile of the receive thread).
+    private val transits = LongArray(windowFrames)
+    private var transitCount = 0
+    private var transitNext = 0
+    private val scratch = LongArray(windowFrames)
+    private var spreadDirty = false
     private var sinceTrim = Int.MAX_VALUE
     private var spurtEnd: Long? = null
 
     /** [spreadPercentile] minus smallest transit time over the recent window, in nanoseconds. */
     var spreadNanos = 0L
+        get() {
+            if (spreadDirty) {
+                spreadDirty = false
+                System.arraycopy(transits, 0, scratch, 0, transitCount)
+                java.util.Arrays.sort(scratch, 0, transitCount)
+                val high = scratch[((transitCount - 1) * spreadPercentile).toInt().coerceIn(0, transitCount - 1)]
+                field = high - scratch[0]
+            }
+            return field
+        }
         private set
 
     /** Current inter-arrival jitter estimate in nanoseconds. */
@@ -81,18 +99,18 @@ class JitterBuffer(
     fun push(index: Long, payload: ByteArray, arrivalNanos: Long): PushResult {
         if (index < nextIndex) return PushResult.LATE // also after a spurt ended or a rebuffer
         if (frames.containsKey(index)) return PushResult.DUPLICATE
-        lastArrival?.let { (prevIndex, prevArrival) ->
-            if (index > prevIndex) {
-                val d = (arrivalNanos - prevArrival) - (index - prevIndex) * frameNanos
-                jitterNanos += (abs(d.toDouble()) - jitterNanos) / 16.0
-            }
+        if (lastIndex >= 0 && index > lastIndex) {
+            val d = (arrivalNanos - lastArrivalNanos) - (index - lastIndex) * frameNanos
+            jitterNanos += (abs(d.toDouble()) - jitterNanos) / 16.0
         }
-        if (lastArrival == null || index > lastArrival!!.first) lastArrival = index to arrivalNanos
-        transits.addLast(arrivalNanos - index * frameNanos)
-        if (transits.size > windowFrames) transits.removeFirst()
-        val sorted = transits.sorted()
-        val high = sorted[((sorted.size - 1) * spreadPercentile).toInt().coerceIn(0, sorted.size - 1)]
-        spreadNanos = high - sorted.first()
+        if (index > lastIndex) {
+            lastIndex = index
+            lastArrivalNanos = arrivalNanos
+        }
+        transits[transitNext] = arrivalNanos - index * frameNanos
+        transitNext = (transitNext + 1) % windowFrames
+        if (transitCount < windowFrames) transitCount++
+        spreadDirty = true
         frames[index] = payload
         return PushResult.ACCEPTED
     }

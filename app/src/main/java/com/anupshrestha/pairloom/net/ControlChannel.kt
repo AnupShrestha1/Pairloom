@@ -116,7 +116,7 @@ class ControlChannel(
                         break
                     }
 
-                    is Message.MediaOffer, is Message.MediaAnswer, Message.MediaStop -> onMedia(message)
+                    is Message.MediaOffer, is Message.MediaAnswer, Message.MediaStop, is Message.GroupInfo -> onMedia(message)
                     else -> throw ControlProtocol.ProtocolException("Unexpected $message during the heartbeat")
                 }
             }

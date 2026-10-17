@@ -163,9 +163,9 @@ class MediaSession(
         running = true
         startNanos = System.nanoTime()
         socket.soTimeout = 200
-        threads += Thread({ threadSetup(); sendLoop() }, "pairloom-media-send")
-        threads += Thread({ threadSetup(); receiveLoop() }, "pairloom-media-recv")
-        threads += Thread({ threadSetup(); playoutLoop() }, "pairloom-media-play")
+        threads += Thread({ threadSetup(); sendLoop() }, "pl-media-send")
+        threads += Thread({ threadSetup(); receiveLoop() }, "pl-media-recv")
+        threads += Thread({ threadSetup(); playoutLoop() }, "pl-media-play")
         threads.forEach { it.isDaemon = true; it.start() }
         log("Media started: local ${socket.localSocketAddress} -> peer $peer")
     }

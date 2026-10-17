@@ -143,7 +143,14 @@ data class LinkDetails(
 )
 
 /** A paired phone as shown in the list. */
-data class PairedDeviceUi(val name: String, val fingerprintHex: String, val shortKey: String, val pairedAtMs: Long)
+data class PairedDeviceUi(
+    val name: String,
+    val fingerprintHex: String,
+    val shortKey: String,
+    val pairedAtMs: Long,
+    /** Its group is known, so this phone can join it without the system prompt. */
+    val canJoinDirectly: Boolean = false,
+)
 
 sealed interface LinkState {
     data object Idle : LinkState
