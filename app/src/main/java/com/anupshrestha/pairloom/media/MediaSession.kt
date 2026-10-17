@@ -43,13 +43,18 @@ data class MediaStats(
     val peerTalking: Boolean = false,
     /** Push-to-talk: talk spurts received so far. */
     val spurts: Long = 0,
+    val codec: AudioCodec = AudioCodec.PCM,
+    /** Delay the codec adds on the sending phone that the buffer does not measure (Opus look-ahead). */
+    val codecDelayMs: Double = 0.0,
+    /** Average time from a packet's arrival until its decoded frames were ready (0 for PCM). */
+    val decodeDelayMs: Double = 0.0,
 ) {
     /**
-     * One-way estimate: half the round trip, the jitter buffer's target playout delay (what playout
-     * converges to) and, for calls, the measured speaker delay plus one 10 ms microphone frame.
+     * One-way estimate: half the round trip, the codec's look-ahead and decoding time, the jitter
+     * buffer's target playout delay (what playout converges to) and, for calls, the measured speaker delay plus one 10 ms microphone frame.
      * The microphone's own hardware delay is not included.
      */
-    val estimatedOneWayMs: Double? get() = rttAvgMs?.let { it / 2 + targetMs + (outputLatencyMs?.let { o -> o + 10.0 } ?: 0.0) }
+    val estimatedOneWayMs: Double? get() = rttAvgMs?.let { it / 2 + targetMs + codecDelayMs + decodeDelayMs + (outputLatencyMs?.let { o -> o + 10.0 } ?: 0.0) }
 
     val lossPercent: Double
         get() = if (received + lost == 0L) 0.0 else 100.0 * lost / (received + lost)
@@ -87,7 +92,18 @@ class MediaSession(
     private val onStopped: () -> Unit = {},
     private val pushToTalk: Boolean = false,
     private val hangoverFrames: Int = 15,
+    /** The codec both directions use (the encoder runs on the send thread, the decoder on the receive thread). */
+    codecs: CodecPair = CodecPair.PCM,
 ) {
+    private val codec = codecs.codec
+    private val encoder: AudioEncoder = codecs.newEncoder { first, payload -> send(PacketKind.AUDIO, (first * samplesPerFrame).toInt(), payload) }
+    private val decoder: AudioDecoder = try {
+        codecs.newDecoder { index, pcm -> onFrame(index, pcm, System.nanoTime()) }
+    } catch (e: Exception) {
+        encoder.close()
+        throw e
+    }
+
     /** Push-to-talk: the local user holds the talk button. Ignored without [pushToTalk]. */
     @Volatile var talking = false
 
@@ -145,6 +161,8 @@ class MediaSession(
         running = false
         runCatching { socket.close() }
         threads.forEach { it.join(1_000) }
+        runCatching { encoder.close() }
+        runCatching { decoder.close() }
         runCatching { source.close() }
         runCatching { sink.close() }
         runCatching { onStopped() }
@@ -182,13 +200,20 @@ class MediaSession(
             talking = sendingSpurt,
             peerTalking = lastPeerFrameNanos != 0L && System.nanoTime() - lastPeerFrameNanos < PEER_TALKING_NANOS,
             spurts = spurts,
+            codec = codec,
+            codecDelayMs = encoder.delayMs,
+            decodeDelayMs = if (decodeCount == 0) 0.0 else decodeNanos / 1e6 / decodeCount,
         )
     }
 
     private var sequence = 0L
 
+    private val sendLock = Any()
+
+    // Called on the send thread and, for Opus, on the encoder's thread: the sequence number must
+    // never repeat under the key, so sealing is serialized.
     private fun send(kind: PacketKind, timestamp: Int, payload: ByteArray) {
-        val bytes = sealer.seal(MediaHeader(kind, sequence++, timestamp), payload)
+        val bytes = synchronized(sendLock) { sealer.seal(MediaHeader(kind, sequence++, timestamp), payload) }
         try {
             socket.send(DatagramPacket(bytes, bytes.size, peer))
             sent.incrementAndGet()
@@ -197,15 +222,35 @@ class MediaSession(
         }
     }
 
-    // The send loop is the only user of the sealer and the sequence counter. Probe replies are
-    // queued here so that every packet is sealed on this one thread.
+    // Probe replies are queued for the send loop, so the receive thread never sends.
     private val pendingReplies = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
 
     /** Last speaker delay measured during playout (the sink cannot report it once closed). */
     @Volatile private var lastOutputLatencyMs: Double? = null
 
     private var hangover = 0
+    private var spurtFrames = 0
+
+    private fun encode(index: Long, frame: ByteArray) {
+        try {
+            encoder.encode(index, frame)
+        } catch (e: Exception) {
+            if (running) log("Media encode failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
     private var lastSentIndex = -1L
+
+    // TALK_END waits a few frame periods after the spurt's last frame, so that a codec running on
+    // its own thread (Opus) has sent the last packet first.
+    private var talkEndIndex = -1L
+    private var talkEndDue = Long.MAX_VALUE
+
+    private fun sendTalkEnd() {
+        val end = ByteBuffer.allocate(8).putLong(talkEndIndex).array()
+        repeat(3) { send(PacketKind.TALK_END, 0, end) }
+        log("Media: talk spurt ends at frame $talkEndIndex")
+        talkEndDue = Long.MAX_VALUE
+    }
 
     private fun sendLoop() {
         var index = 0L
@@ -224,21 +269,27 @@ class MediaSession(
             if (!running) break
             while (true) send(PacketKind.PROBE_REPLY, 0, pendingReplies.poll() ?: break)
             if (!pushToTalk) {
-                send(PacketKind.AUDIO, (index * samplesPerFrame).toInt(), frame)
+                encode(index, frame)
             } else {
                 if (talking) hangover = hangoverFrames
-                if (talking || hangover > 0) {
-                    if (!talking) hangover--
-                    if (!sendingSpurt) log("Media: talk spurt starts at frame $index")
+                // A spurt also runs on to a whole packet, so the codec holds no frame of it back.
+                if (talking || hangover > 0 || (sendingSpurt && spurtFrames % encoder.framesPerPacket != 0)) {
+                    if (!talking && hangover > 0) hangover--
+                    if (!sendingSpurt) {
+                        if (talkEndDue != Long.MAX_VALUE) sendTalkEnd() // the previous spurt's
+                        log("Media: talk spurt starts at frame $index")
+                        spurtFrames = 0
+                    }
                     sendingSpurt = true
-                    send(PacketKind.AUDIO, (index * samplesPerFrame).toInt(), frame)
+                    encode(index, frame)
+                    spurtFrames++
                     lastSentIndex = index
                 } else if (sendingSpurt) {
                     sendingSpurt = false
-                    val end = ByteBuffer.allocate(8).putLong(lastSentIndex).array()
-                    repeat(3) { send(PacketKind.TALK_END, 0, end) }
-                    log("Media: talk spurt ends at frame $lastSentIndex")
+                    talkEndIndex = lastSentIndex
+                    talkEndDue = index + TALK_END_DELAY_FRAMES
                 }
+                if (index >= talkEndDue) sendTalkEnd()
             }
             if (index % probeEvery == 0L) {
                 send(PacketKind.PROBE, 0, ByteBuffer.allocate(8).putLong(System.nanoTime()).array())
@@ -282,14 +333,36 @@ class MediaSession(
         }
     }
 
+    // Decode delay: arrival time of recent packets by first frame index (receive thread writes,
+    // decoder output reads), matched when that frame comes out of the decoder.
+    private val arrivals = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    private var decodeNanos = 0L
+    private var decodeCount = 0
+
     private fun onAudio(p: OpenedPacket, now: Long) {
         val index = (p.header.timestamp.toLong() and 0xFFFF_FFFFL) / samplesPerFrame
+        if (arrivals.size > 500) arrivals.clear() // outputs that never came
+        arrivals[index] = now
+        try {
+            decoder.decode(index, p.payload)
+        } catch (e: Exception) {
+            if (running) log("Media decode failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /** One decoded 10 ms frame (receive thread). */
+    private fun onFrame(index: Long, payload: ByteArray, now: Long) {
+        val arrived = arrivals.remove(index)
         synchronized(lock) {
+            if (arrived != null) {
+                decodeNanos += now - arrived
+                decodeCount++
+            }
             if (pushToTalk && index > endedSpurtIndex && (firstIndex < 0 || index > highestIndex + SPURT_GAP_FRAMES)) {
                 closeSpurt() // a TALK_END may have been lost
                 spurts++
             }
-            when (buffer.push(index, p.payload, now)) {
+            when (buffer.push(index, payload, now)) {
                 PushResult.ACCEPTED -> if (index > endedSpurtIndex) {
                     audioReceived++
                     if (firstIndex < 0 || index < firstIndex) firstIndex = index
@@ -379,16 +452,18 @@ class MediaSession(
         /** In push-to-talk, a jump of more than this many frames starts a new spurt (TALK_END lost). */
         private const val SPURT_GAP_FRAMES = 50
         private const val PEER_TALKING_NANOS = 150_000_000L
+        private const val TALK_END_DELAY_FRAMES = 3
 
         fun describe(s: MediaStats): String = String.format(
             java.util.Locale.US,
-            "%d s, sent %d, received %d, lost %d (%.2f%%), late %d, dup %d, auth-fail %d, wrong-source %d, played %d (intact %d, corrupted %d), concealed %d, dropped %d, buffer %.0f/%.0f ms, jitter %.1f ms, spread %.0f ms, rtt avg %s min %s max %s ms, speaker %s ms, est. one-way %s ms",
-            s.uptimeMs / 1000, s.sent, s.received, s.lost, s.lossPercent, s.late, s.duplicates, s.authFailures, s.wrongSource,
+            "%s, %d s, sent %d, received %d, lost %d (%.2f%%), late %d, dup %d, auth-fail %d, wrong-source %d, played %d (intact %d, corrupted %d), concealed %d, dropped %d, buffer %.0f/%.0f ms, jitter %.1f ms, spread %.0f ms, rtt avg %s min %s max %s ms, speaker %s ms, decode %.1f ms, est. one-way %s ms",
+            s.codec, s.uptimeMs / 1000, s.sent, s.received, s.lost, s.lossPercent, s.late, s.duplicates, s.authFailures, s.wrongSource,
             s.played, s.intact, s.corrupted, s.concealed, s.droppedForLatency, s.bufferMs, s.targetMs, s.jitterMs, s.spreadMs,
             s.rttAvgMs?.let { "%.1f".format(java.util.Locale.US, it) } ?: "-",
             s.rttMinMs?.let { "%.1f".format(java.util.Locale.US, it) } ?: "-",
             s.rttMaxMs?.let { "%.1f".format(java.util.Locale.US, it) } ?: "-",
             s.outputLatencyMs?.let { "%.0f".format(java.util.Locale.US, it) } ?: "-",
+            s.decodeDelayMs,
             s.estimatedOneWayMs?.let { "%.0f".format(java.util.Locale.US, it) } ?: "-",
         )
     }

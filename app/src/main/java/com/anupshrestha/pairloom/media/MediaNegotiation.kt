@@ -35,7 +35,9 @@ enum class MediaKind(val code: Int) {
  * own sending direction and sends a MEDIA_OFFER; the peer answers with its own port and key, and
  * both start a [MediaSession] towards the address of the authenticated TLS peer. A voice offer
  * waits until the receiving user calls [accept] (or [decline]); a tone offer is answered at once.
- * If both phones offer at once, the TLS server's offer wins. All methods may block on network I/O,
+ * If both phones offer at once, the TLS server's offer wins. The offer lists the codecs the offerer
+ * can use and the answer picks one for both directions: Opus when both phones have it, otherwise
+ * PCM (the test tone always uses PCM, as its frames are checked bit for bit). All methods may block on network I/O,
  * so they must run off the main thread; they are synchronized.
  */
 class MediaNegotiation(
@@ -43,12 +45,20 @@ class MediaNegotiation(
     private val localAddress: InetAddress,
     private val peerAddress: InetAddress,
     private val send: (Message) -> Unit,
-    private val newSession: (MediaKind, DatagramSocket, InetSocketAddress, DirectionKey, DirectionKey) -> MediaSession =
-        { _, s, p, out, `in` -> MediaSession(s, p, out, `in`) },
+    private val newSession: (MediaKind, AudioCodec, DatagramSocket, InetSocketAddress, DirectionKey, DirectionKey) -> MediaSession =
+        { _, _, s, p, out, `in` -> MediaSession(s, p, out, `in`) },
+    /** Codecs this phone can use for voice now, as an [AudioCodec] bit mask (PCM is always added). */
+    private val localCodecs: () -> Int = { AudioCodec.PCM.bit },
     private val log: (String) -> Unit = {},
     private val random: SecureRandom = SecureRandom(),
 ) {
-    private class Offer(val kind: MediaKind, val socket: DatagramSocket, val key: DirectionKey)
+    private class Offer(val kind: MediaKind, val codecs: Int, val socket: DatagramSocket, val key: DirectionKey)
+
+    private fun codecsFor(kind: MediaKind) = if (kind == MediaKind.TONE) AudioCodec.PCM.bit else localCodecs() or AudioCodec.PCM.bit
+
+    /** The codec of the running session, if any. */
+    @Volatile var codec: AudioCodec? = null
+        private set
 
     private var offer: Offer? = null
     private var incoming: Message.MediaOffer? = null
@@ -75,10 +85,11 @@ class MediaNegotiation(
         if (session != null || offer != null || incoming != null) return
         val socket = bind()
         val key = DirectionKey.random(random)
-        offer = Offer(kind, socket, key)
+        val codecs = codecsFor(kind)
+        offer = Offer(kind, codecs, socket, key)
         log("Media: offering $kind from port ${socket.localPort}")
         try {
-            send(Message.MediaOffer(kind.code, socket.localPort, key.key.toHex(), key.salt.toHex()))
+            send(Message.MediaOffer(kind.code, codecs, socket.localPort, key.key.toHex(), key.salt.toHex()))
         } catch (e: Exception) {
             offer = null
             socket.close()
@@ -120,6 +131,7 @@ class MediaNegotiation(
         val stats = session?.stop()
         session = null
         kind = null
+        codec = null
         return stats
     }
 
@@ -163,37 +175,47 @@ class MediaNegotiation(
     private fun answer(m: Message.MediaOffer) {
         val offeredKind = MediaKind.fromCode(m.kind) ?: return
         val peerKey = key(m.keyHex, m.saltHex) ?: return
+        val chosen = AudioCodec.choose(m.codecs, codecsFor(offeredKind))
         val socket = bind()
         val own = DirectionKey.random(random)
         try {
-            send(Message.MediaAnswer(socket.localPort, own.key.toHex(), own.salt.toHex()))
+            send(Message.MediaAnswer(chosen.code, socket.localPort, own.key.toHex(), own.salt.toHex()))
         } catch (e: Exception) {
             socket.close()
             throw e
         }
-        begin(offeredKind, socket, m.port, own, peerKey)
+        begin(offeredKind, chosen, socket, m.port, own, peerKey)
     }
 
     private fun onAnswer(m: Message.MediaAnswer) {
         val pending = offer ?: return log("Media: ignored an answer without an offer")
         val peerKey = key(m.keyHex, m.saltHex) ?: return log("Media: ignored an answer with a malformed key")
+        val chosen = AudioCodec.fromCode(m.codec)?.takeIf { it.bit and pending.codecs != 0 }
         offer = null
-        begin(pending.kind, pending.socket, m.port, pending.key, peerKey)
+        if (chosen == null) {
+            pending.socket.close()
+            log("Media: the answer chose codec ${m.codec}, which was not offered")
+            runCatching { send(Message.MediaStop) }
+            return
+        }
+        begin(pending.kind, chosen, pending.socket, m.port, pending.key, peerKey)
     }
 
-    private fun begin(k: MediaKind, socket: DatagramSocket, peerPort: Int, sendKey: DirectionKey, receiveKey: DirectionKey) {
+    private fun begin(k: MediaKind, c: AudioCodec, socket: DatagramSocket, peerPort: Int, sendKey: DirectionKey, receiveKey: DirectionKey) {
         starting = true // opening the microphone and speaker takes a moment
         try {
             val s = try {
-                newSession(k, socket, InetSocketAddress(peerAddress, peerPort), sendKey, receiveKey)
+                newSession(k, c, socket, InetSocketAddress(peerAddress, peerPort), sendKey, receiveKey)
             } catch (e: Exception) {
                 socket.close()
-                log("Media: could not start ($k): ${e.message}")
+                log("Media: could not start ($k, $c): ${e.message}")
                 runCatching { send(Message.MediaStop) }
                 return
             }
             session = s
             kind = k
+            codec = c
+            log("Media: $k with $c")
             s.start()
         } finally {
             starting = false

@@ -15,7 +15,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.anupshrestha.pairloom.media.CallAudio
 import com.anupshrestha.pairloom.media.DirectionKey
+import com.anupshrestha.pairloom.media.AudioCodec
+import com.anupshrestha.pairloom.media.CodecPair
 import com.anupshrestha.pairloom.media.MediaKind
+import com.anupshrestha.pairloom.media.OpusSupport
 import com.anupshrestha.pairloom.media.MediaNegotiation
 import com.anupshrestha.pairloom.media.MicrophoneSource
 import com.anupshrestha.pairloom.media.SpeakerSink
@@ -375,7 +378,19 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var callMuted = false
     @Volatile private var callSpeaker = false
 
-    private fun newMediaSession(kind: MediaKind, socket: DatagramSocket, peer: InetSocketAddress, out: DirectionKey, input: DirectionKey): MediaSession {
+    /** Whether this phone has a platform Opus encoder and decoder (checked once). */
+    private val opusAvailable: Boolean by lazy { OpusSupport.available().also { log(if (it) "Opus available" else "Opus not available; voice uses PCM") } }
+
+    /** Diagnostics switch: offer Opus for voice (on by default). PCM is used when either phone has it off. */
+    @Volatile private var opusEnabled = true
+
+    fun toggleOpus() {
+        opusEnabled = !opusEnabled
+        log(if (opusEnabled) "Opus enabled for new calls" else "Opus disabled for new calls (PCM)")
+        _ui.update { it.copy(opusEnabled = opusEnabled) }
+    }
+
+    private fun newMediaSession(kind: MediaKind, codec: AudioCodec, socket: DatagramSocket, peer: InetSocketAddress, out: DirectionKey, input: DirectionKey): MediaSession {
         val priority = { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
         if (kind == MediaKind.TONE) return MediaSession(socket, peer, out, input, threadSetup = priority, log = { log(it) })
         callMuted = false
@@ -400,15 +415,26 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         }
         activeMic = mic
         activeCallAudio = audio
-        return MediaSession(
-            socket, peer, out, input, source = mic, sink = speaker, verify = null, threadSetup = priority, log = { log(it) },
-            pushToTalk = kind == MediaKind.PTT,
-            onStopped = {
-                audio.end()
-                if (activeCallAudio === audio) activeCallAudio = null
-                if (activeMic === mic) activeMic = null
-            },
-        )
+        val session = try {
+            MediaSession(
+                socket, peer, out, input, source = mic, sink = speaker, verify = null, threadSetup = priority, log = { log(it) },
+                pushToTalk = kind == MediaKind.PTT,
+                codecs = if (codec == AudioCodec.OPUS) OpusSupport.pair { log(it) } else CodecPair.PCM,
+                onStopped = {
+                    audio.end()
+                    if (activeCallAudio === audio) activeCallAudio = null
+                    if (activeMic === mic) activeMic = null
+                },
+            )
+        } catch (e: Exception) {
+            if (activeMic === mic) activeMic = null
+            if (activeCallAudio === audio) activeCallAudio = null
+            mic.close()
+            speaker.close()
+            audio.end()
+            throw e
+        }
+        return session
     }
 
     /** Media-control messages arrive on the control channel's read thread. */
@@ -984,8 +1010,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 localAddress = local,
                 peerAddress = remote,
                 send = { ch.sendMessage(it) },
-                newSession = { kind, s, p, out, input -> newMediaSession(kind, s, p, out, input) },
+                newSession = { kind, codec, s, p, out, input -> newMediaSession(kind, codec, s, p, out, input) },
                 log = { log(it) },
+                localCodecs = { if (opusEnabled && opusAvailable) AudioCodec.OPUS.bit else 0 },
             )
             startMediaPoll(generation)
         } else {

@@ -1,6 +1,8 @@
 package com.anupshrestha.pairloom
 
+import com.anupshrestha.pairloom.media.AudioCodec
 import com.anupshrestha.pairloom.media.Concealer
+import com.anupshrestha.pairloom.media.Opus
 import com.anupshrestha.pairloom.media.DirectionKey
 import com.anupshrestha.pairloom.media.JitterBuffer
 import com.anupshrestha.pairloom.media.MediaHeader
@@ -235,6 +237,44 @@ class MediaCoreTest {
         assertEquals(PushResult.LATE, jb.push(5, frame(5), 200 * ms))
         for (i in 100L..102L) jb.push(i, frame(i), i * 10 * ms)
         assertEquals(listOf(100L, 101L, 102L), drain(jb, 3).map { (it as Playout.Frame).index })
+    }
+
+    // --- codec helpers --------------------------------------------------------------------------
+
+    @Test
+    fun codecChoiceNeedsBothPhones() {
+        val both = AudioCodec.mask(listOf(AudioCodec.PCM, AudioCodec.OPUS))
+        assertEquals(3, both)
+        assertEquals(AudioCodec.OPUS, AudioCodec.choose(both, both))
+        assertEquals(AudioCodec.PCM, AudioCodec.choose(both, AudioCodec.PCM.bit))
+        assertEquals(AudioCodec.PCM, AudioCodec.choose(AudioCodec.PCM.bit, both))
+        assertEquals(AudioCodec.PCM, AudioCodec.choose(0, 0))
+        assertNull(AudioCodec.fromCode(7))
+    }
+
+    @Test
+    fun opusPacketDurationsComeFromTheTocByte() {
+        fun toc(config: Int, code: Int) = ((config shl 3) or code).toByte()
+        assertEquals(960, Opus.packetSamples(byteArrayOf(toc(31, 0)))) // CELT FB 20 ms
+        assertEquals(480, Opus.packetSamples(byteArrayOf(toc(30, 0)))) // CELT FB 10 ms
+        assertEquals(960, Opus.packetSamples(byteArrayOf(toc(1, 0)))) // SILK NB 20 ms
+        assertEquals(960, Opus.packetSamples(byteArrayOf(toc(13, 0)))) // hybrid SWB 20 ms
+        assertEquals(1920, Opus.packetSamples(byteArrayOf(toc(31, 1)))) // two frames
+        assertEquals(2880, Opus.packetSamples(byteArrayOf(toc(31, 3), 3))) // code 3, three frames
+        assertNull(Opus.packetSamples(byteArrayOf(toc(31, 3)))) // code 3 without a count
+        assertNull(Opus.packetSamples(ByteArray(0)))
+    }
+
+    @Test
+    fun opusDecoderConfigIsMono48kWithoutPreSkip() {
+        val (head, delay, preroll) = Opus.decoderConfig()
+        assertEquals(19, head.size)
+        assertEquals("OpusHead", String(head, 0, 8, Charsets.US_ASCII))
+        assertEquals(1, head[9].toInt()) // channels
+        assertEquals(0, head[10].toInt() or head[11].toInt()) // pre-skip
+        assertEquals(48_000, java.nio.ByteBuffer.wrap(head, 12, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int)
+        assertEquals(0L, java.nio.ByteBuffer.wrap(delay).order(java.nio.ByteOrder.LITTLE_ENDIAN).long)
+        assertEquals(80_000_000L, java.nio.ByteBuffer.wrap(preroll).order(java.nio.ByteOrder.LITTLE_ENDIAN).long)
     }
 
     // --- concealment, PCM, tone -----------------------------------------------------------------

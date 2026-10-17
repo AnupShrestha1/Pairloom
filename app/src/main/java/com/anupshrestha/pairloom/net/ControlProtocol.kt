@@ -16,7 +16,7 @@ import java.io.InputStream
  */
 object ControlProtocol {
     const val MAGIC = "PLM1"
-    const val VERSION = 3
+    const val VERSION = 4
     const val MAX_FRAME_BODY = 256
     const val MAX_NAME_BYTES = 64
     const val INSTALL_ID_BYTES = 16
@@ -62,13 +62,14 @@ object ControlProtocol {
         data class Confirm(val accepted: Boolean) : Message
 
         /**
-         * Starts a media session: the sender's UDP port and the key and salt it will use for the
+         * Starts a media session: what it carries, the audio codecs the sender can use (a bit mask,
+         * bit n = codec code n), the sender's UDP port and the key and salt it will use for the
          * packets it sends. Only ever sent inside the TLS channel.
          */
-        data class MediaOffer(val kind: Int, val port: Int, val keyHex: String, val saltHex: String) : Message
+        data class MediaOffer(val kind: Int, val codecs: Int, val port: Int, val keyHex: String, val saltHex: String) : Message
 
-        /** Accepts a [MediaOffer] with the answerer's port, key and salt. */
-        data class MediaAnswer(val port: Int, val keyHex: String, val saltHex: String) : Message
+        /** Accepts a [MediaOffer] with the codec both directions use and the answerer's port, key and salt. */
+        data class MediaAnswer(val codec: Int, val port: Int, val keyHex: String, val saltHex: String) : Message
 
         /** Ends the media session. */
         data object MediaStop : Message
@@ -136,13 +137,17 @@ object ControlProtocol {
 
             is Message.MediaOffer -> {
                 require(message.kind in 0..255) { "media kind out of range" }
+                require(message.codecs in 0..255) { "codec mask out of range" }
                 out.writeByte(TYPE_MEDIA_OFFER)
                 out.writeByte(message.kind)
+                out.writeByte(message.codecs)
                 writeMedia(out, message.port, message.keyHex, message.saltHex)
             }
 
             is Message.MediaAnswer -> {
+                require(message.codec in 0..255) { "codec out of range" }
                 out.writeByte(TYPE_MEDIA_ANSWER)
+                out.writeByte(message.codec)
                 writeMedia(out, message.port, message.keyHex, message.saltHex)
             }
 
@@ -205,11 +210,16 @@ object ControlProtocol {
             TYPE_NONCE -> Message.Nonce(decodeFixed(payload, PAIRING_VALUE_BYTES, "NONCE"))
             TYPE_REVEAL -> Message.Reveal(decodeFixed(payload, PAIRING_VALUE_BYTES, "REVEAL"))
             TYPE_MEDIA_OFFER -> {
-                if (payload.isEmpty()) throw ProtocolException("MEDIA_OFFER is empty")
+                if (payload.size < 2) throw ProtocolException("MEDIA_OFFER is too short")
                 val kind = payload[0].toInt() and 0xFF
-                readMedia(payload.copyOfRange(1, payload.size), "MEDIA_OFFER").let { (p, k, s) -> Message.MediaOffer(kind, p, k, s) }
+                val codecs = payload[1].toInt() and 0xFF
+                readMedia(payload.copyOfRange(2, payload.size), "MEDIA_OFFER").let { (p, k, s) -> Message.MediaOffer(kind, codecs, p, k, s) }
             }
-            TYPE_MEDIA_ANSWER -> readMedia(payload, "MEDIA_ANSWER").let { (p, k, s) -> Message.MediaAnswer(p, k, s) }
+            TYPE_MEDIA_ANSWER -> {
+                if (payload.isEmpty()) throw ProtocolException("MEDIA_ANSWER is empty")
+                val codec = payload[0].toInt() and 0xFF
+                readMedia(payload.copyOfRange(1, payload.size), "MEDIA_ANSWER").let { (p, k, s) -> Message.MediaAnswer(codec, p, k, s) }
+            }
             TYPE_MEDIA_STOP -> {
                 if (payload.isNotEmpty()) throw ProtocolException("MEDIA_STOP must have no payload")
                 Message.MediaStop

@@ -67,6 +67,7 @@ class ConnectionActions(
     val onPushToTalk: () -> Unit,
     /** The talk button was pressed (true) or released (false). */
     val onTalk: (Boolean) -> Unit,
+    val onToggleOpus: () -> Unit,
 )
 
 @Composable
@@ -117,7 +118,7 @@ fun ConnectionScreen(
             is LinkState.Linked -> {
                 CallCard(link.details, ui.micDenied, actions)
                 LinkedCard(link.details)
-                MediaCard(link.details, actions)
+                MediaCard(link.details, ui.opusEnabled, actions)
             }
             else -> Unit
         }
@@ -350,6 +351,7 @@ private fun CallCard(details: LinkDetails, micDenied: Boolean, actions: Connecti
                                 R.string.call_quality,
                                 String.format(Locale.US, "%.1f", s.lossPercent + if (s.played + s.concealed > 0) 100.0 * s.concealed / (s.played + s.concealed) else 0.0),
                                 s.estimatedOneWayMs?.let { String.format(Locale.US, "%.0f", it) } ?: "–",
+                                s.codec.name,
                             ),
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -427,7 +429,7 @@ private fun PushToTalkPanel(details: LinkDetails, actions: ConnectionActions) {
 }
 
 @Composable
-private fun MediaCard(details: LinkDetails, actions: ConnectionActions) {
+private fun MediaCard(details: LinkDetails, opusEnabled: Boolean, actions: ConnectionActions) {
     val toneActive = details.mediaActive && details.mediaKind == MediaKind.TONE
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -435,12 +437,17 @@ private fun MediaCard(details: LinkDetails, actions: ConnectionActions) {
             when {
                 toneActive -> OutlinedButton(onClick = actions.onStopMedia) { Text(stringResource(R.string.btn_stop_tone)) }
                 details.mediaActive || details.mediaOffering || details.incomingCall -> Unit
-                else -> OutlinedButton(onClick = actions.onStartTone) { Text(stringResource(R.string.btn_start_tone)) }
+                else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = actions.onStartTone) { Text(stringResource(R.string.btn_start_tone)) }
+                    OutlinedButton(onClick = actions.onToggleOpus) {
+                        Text(stringResource(if (opusEnabled) R.string.btn_opus_on else R.string.btn_opus_off))
+                    }
+                }
             }
             val s = details.media ?: return@Column
             fun f(v: Double?) = v?.let { String.format(Locale.US, "%.1f", it) } ?: "–"
             Text(
-                text = stringResource(R.string.media_packets, s.sent, s.received, s.lost, String.format(Locale.US, "%.2f", s.lossPercent)),
+                text = stringResource(R.string.media_packets, s.sent, s.received, s.lost, String.format(Locale.US, "%.2f", s.lossPercent), s.codec.name),
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(

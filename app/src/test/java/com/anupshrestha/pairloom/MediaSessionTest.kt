@@ -1,6 +1,12 @@
 package com.anupshrestha.pairloom
 
+import com.anupshrestha.pairloom.media.AudioCodec
+import com.anupshrestha.pairloom.media.AudioDecoder
+import com.anupshrestha.pairloom.media.AudioEncoder
+import com.anupshrestha.pairloom.media.CodecPair
 import com.anupshrestha.pairloom.media.DirectionKey
+import com.anupshrestha.pairloom.media.PacketSink
+import com.anupshrestha.pairloom.media.PcmFrameSink
 import com.anupshrestha.pairloom.media.MediaHeader
 import com.anupshrestha.pairloom.media.FrameSink
 import com.anupshrestha.pairloom.media.FrameSource
@@ -218,11 +224,123 @@ class MediaSessionTest {
         assertEquals(1, stopped.get())
     }
 
+    // --- codecs ---------------------------------------------------------------------------------
+
+    /** A stand-in for Opus: two 10 ms frames per packet, bit-exact, so the tone can be checked. */
+    private class TwoFrameEncoder(private val out: PacketSink) : AudioEncoder {
+        override val framesPerPacket = 2
+        override val delayMs = 0.0
+        private var held: Pair<Long, ByteArray>? = null
+        override fun encode(index: Long, pcm: ByteArray) {
+            val h = held
+            if (h == null || h.first + 1 != index) { held = index to pcm; return }
+            held = null
+            out.packet(h.first, h.second + pcm)
+        }
+    }
+
+    private class TwoFrameDecoder(private val out: PcmFrameSink) : AudioDecoder {
+        override fun decode(firstIndex: Long, payload: ByteArray) {
+            for (k in 0 until payload.size / 960) out.frame(firstIndex + k, payload.copyOfRange(k * 960, (k + 1) * 960))
+        }
+    }
+
+    private val twoFrame = CodecPair(AudioCodec.OPUS, ::TwoFrameEncoder, ::TwoFrameDecoder)
+
+    @Test
+    fun multiFramePacketsArriveIntact() {
+        val sa = socket(); val sb = socket()
+        val ka = DirectionKey.random(); val kb = DirectionKey.random()
+        val a = MediaSession(sa, InetSocketAddress(lo, sb.localPort), ka, kb, codecs = twoFrame)
+        val b = MediaSession(sb, InetSocketAddress(lo, sa.localPort), kb, ka, codecs = twoFrame)
+        a.start(); b.start()
+        Thread.sleep(1_200)
+        for (s in listOf(a.stop(), b.stop())) {
+            assertEquals(AudioCodec.OPUS, s.codec)
+            assertTrue("played ${s.played}", s.played > 60)
+            assertEquals(s.played, s.intact)
+            assertTrue("loss ${s.lossPercent}", s.lossPercent < 5.0)
+            // Two frames per audio packet: far fewer packets than frames.
+            assertTrue("received ${s.received}", s.received < 0.75 * (s.played + s.concealed + 40))
+        }
+    }
+
+    @Test
+    fun pushToTalkSpurtsEndOnAWholePacket() {
+        val sa = socket(); val sb = socket()
+        val ka = DirectionKey.random(); val kb = DirectionKey.random()
+        val logs = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val a = MediaSession(sa, InetSocketAddress(lo, sb.localPort), ka, kb, pushToTalk = true, hangoverFrames = 3, codecs = twoFrame, log = { logs += it })
+        val b = MediaSession(sb, InetSocketAddress(lo, sa.localPort), kb, ka, pushToTalk = true, codecs = twoFrame)
+        a.start(); b.start()
+        repeat(3) {
+            a.talking = true
+            Thread.sleep(205L + 10 * it) // odd and even frame counts
+            a.talking = false
+            Thread.sleep(400)
+        }
+        a.stop(); val s = b.stop()
+        assertEquals(3L, s.spurts)
+        assertEquals(s.played, s.intact)
+        assertTrue("concealed ${s.concealed}", s.concealed <= 3)
+        assertTrue("loss ${s.lossPercent}", s.lossPercent < 5.0)
+        val starts = logs.mapNotNull { Regex("starts at frame (\\d+)").find(it)?.groupValues?.get(1)?.toLong() }
+        val ends = logs.mapNotNull { Regex("ends at frame (\\d+)").find(it)?.groupValues?.get(1)?.toLong() }
+        assertEquals(3, ends.size)
+        for ((st, en) in starts.zip(ends)) assertEquals("spurt $st..$en", 0L, (en - st + 1) % 2)
+    }
+
+    private fun opusNegotiations(aCodecs: Int, bCodecs: Int): Array<MediaNegotiation> {
+        val sides = arrayOfNulls<MediaNegotiation>(2)
+        val masks = intArrayOf(aCodecs, bCodecs)
+        fun make(i: Int, server: Boolean) = MediaNegotiation(
+            server, lo, lo, send = { m -> sides[1 - i]!!.onMessage(m) },
+            newSession = { _, c, s, p, out, inKey -> MediaSession(s, p, out, inKey, codecs = if (c == AudioCodec.OPUS) twoFrame else CodecPair.PCM) },
+            localCodecs = { masks[i] },
+        )
+        sides[0] = make(0, true); sides[1] = make(1, false)
+        return sides.requireNoNulls()
+    }
+
+    @Test
+    fun opusIsChosenOnlyWhenBothPhonesHaveIt() {
+        for ((masks, expected) in listOf(
+            (AudioCodec.OPUS.bit to AudioCodec.OPUS.bit) to AudioCodec.OPUS,
+            (AudioCodec.OPUS.bit to 0) to AudioCodec.PCM,
+            (0 to AudioCodec.OPUS.bit) to AudioCodec.PCM,
+        )) {
+            val (a, b) = opusNegotiations(masks.first, masks.second)
+            a.start(MediaKind.PTT)
+            b.accept()
+            assertEquals(expected, a.codec)
+            assertEquals(expected, b.codec)
+            a.stop()
+            assertNull(b.session)
+        }
+        // The test tone is always PCM, as its frames are checked bit for bit.
+        val (a, b) = opusNegotiations(AudioCodec.OPUS.bit, AudioCodec.OPUS.bit)
+        a.start(MediaKind.TONE)
+        assertEquals(AudioCodec.PCM, a.codec)
+        assertEquals(AudioCodec.PCM, b.codec)
+        a.stop()
+    }
+
+    @Test
+    fun anAnswerWithACodecThatWasNotOfferedEndsTheAttempt() {
+        val sent = mutableListOf<Message>()
+        val n = MediaNegotiation(false, lo, lo, send = { sent += it })
+        n.start(MediaKind.VOICE) // offers PCM only
+        n.onMessage(Message.MediaAnswer(AudioCodec.OPUS.code, 1234, "ab".repeat(32), "01020304"))
+        assertNull(n.session)
+        assertTrue(!n.isOffering)
+        assertEquals(Message.MediaStop, sent.last())
+    }
+
     @Test
     fun malformedOffersAreIgnored() {
         val sent = mutableListOf<Message>()
         val n = MediaNegotiation(false, lo, lo, send = { sent += it })
-        n.onMessage(Message.MediaAnswer(1234, "ab".repeat(32), "01020304")) // answer without offer
+        n.onMessage(Message.MediaAnswer(0, 1234, "ab".repeat(32), "01020304")) // answer without offer
         assertNull(n.session)
         assertTrue(sent.isEmpty())
         n.onMessage(Message.MediaStop)
