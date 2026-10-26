@@ -18,7 +18,7 @@ import java.io.InputStream
  */
 object ControlProtocol {
     const val MAGIC = "PLM1"
-    const val VERSION = 5
+    const val VERSION = 6
     const val MAX_FRAME_BODY = 256
     const val MAX_NAME_BYTES = 64
     const val INSTALL_ID_BYTES = 16
@@ -82,8 +82,14 @@ object ControlProtocol {
          * authenticated, paired phone) can later join the sender's group directly, without the
          * system's connection prompt. Only ever sent inside the TLS channel.
          */
-        data class GroupInfo(val networkName: String, val passphrase: String) : Message {
-            override fun toString(): String = "GroupInfo(networkName=$networkName, passphrase=<hidden>)"
+        data class GroupInfo(
+            val networkName: String,
+            val passphrase: String,
+            /** The sender's normal Wi-Fi channel in MHz, 0 if not connected: a host can share it. */
+            val staFrequencyMhz: Int = 0,
+        ) : Message {
+            override fun toString(): String =
+                "GroupInfo(networkName=$networkName, passphrase=<hidden>, staFrequencyMhz=$staFrequencyMhz)"
         }
     }
 
@@ -168,11 +174,13 @@ object ControlProtocol {
             is Message.GroupInfo -> {
                 require(GroupCredentials.isValid(message.networkName, message.passphrase)) { "invalid group credentials" }
                 out.writeByte(TYPE_GROUP_INFO)
+                require(message.staFrequencyMhz in 0..65535) { "frequency out of range" }
                 for (v in listOf(message.networkName, message.passphrase)) {
                     val bytes = v.toByteArray(Charsets.US_ASCII)
                     out.writeByte(bytes.size)
                     out.write(bytes)
                 }
+                out.writeShort(message.staFrequencyMhz)
             }
         }
         val bytes = body.toByteArray()
@@ -250,9 +258,11 @@ object ControlProtocol {
             TYPE_GROUP_INFO -> {
                 val name = readShortAscii(payload, 0, "GROUP_INFO")
                 val pass = readShortAscii(payload, 1 + name.length, "GROUP_INFO")
-                if (2 + name.length + pass.length != payload.size) throw ProtocolException("GROUP_INFO has trailing bytes")
+                val end = 2 + name.length + pass.length
+                if (end + 2 != payload.size) throw ProtocolException("GROUP_INFO has the wrong size")
                 if (!GroupCredentials.isValid(name, pass)) throw ProtocolException("GROUP_INFO is not a valid group")
-                Message.GroupInfo(name, pass)
+                val frequency = ((payload[end].toInt() and 0xFF) shl 8) or (payload[end + 1].toInt() and 0xFF)
+                Message.GroupInfo(name, pass, frequency)
             }
 
             TYPE_CONFIRM -> {

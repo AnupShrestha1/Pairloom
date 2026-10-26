@@ -286,6 +286,11 @@ class SecurityCoreTest {
         assertEquals(group.networkName, d.groupName)
         assertEquals(group.passphrase, d.groupPassphrase)
         assertTrue(file.readText().startsWith(PairedDeviceStore.HEADER + "\n"))
+        assertTrue(store.updateGroup(fp, group.networkName, group.passphrase, 2437))
+        assertEquals(2437, PairedDeviceStore(file).load().single().staFrequencyMhz)
+        // A version-2 line (groups, no frequency) still loads, with the frequency unknown.
+        file.writeText("${PairedDeviceStore.HEADER_V2}\n$fp\t${"1".repeat(32)}\tbmFtZQ\t5\t${group.networkName}\t${group.passphrase}\n")
+        assertEquals(0, PairedDeviceStore(file).load().single().staFrequencyMhz)
         assertFalse("passphrase must not appear in toString", d.toString().contains(group.passphrase))
     }
 
@@ -294,7 +299,7 @@ class SecurityCoreTest {
         val file = tmp.newFolder().resolve("paired")
         val row = "${"a".repeat(64)}\t${"1".repeat(32)}\tbmFtZQ\t5"
         for (cols in listOf("DIRECT-ab-Other\tAbcdefgh12345678", "DIRECT-ab-Pairloom\tshort", "DIRECT-ab-Pairloom\t-", "-")) {
-            file.writeText("${PairedDeviceStore.HEADER}\n$row\t$cols\n")
+            file.writeText("${PairedDeviceStore.HEADER_V2}\n$row\t$cols\n")
             assertThrows(cols, TrustStoreException::class.java) { PairedDeviceStore(file).load() }
         }
     }

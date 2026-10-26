@@ -19,10 +19,12 @@ data class PairedDevice(
     val pairedAtMs: Long,
     val groupName: String? = null,
     val groupPassphrase: String? = null,
+    /** Its normal Wi-Fi channel (MHz) on the last link, 0 if unknown or not connected. */
+    val staFrequencyMhz: Int = 0,
 ) {
     override fun toString(): String =
         "PairedDevice(fingerprintHex=$fingerprintHex, installIdHex=$installIdHex, name=$name, pairedAtMs=$pairedAtMs, " +
-            "groupName=$groupName, groupPassphrase=${if (groupPassphrase == null) "null" else "<hidden>"})"
+            "groupName=$groupName, groupPassphrase=${if (groupPassphrase == null) "null" else "<hidden>"}, staFrequencyMhz=$staFrequencyMhz)"
 }
 
 /** The paired-device file exists but cannot be trusted; sessions must be refused. */
@@ -32,10 +34,10 @@ class TrustStoreException(message: String) : IOException(message)
  * The paired phones, kept in one versioned text file that is replaced atomically on every change.
  * Pure java.io, so it is unit-testable on the JVM. The app keeps the file in `noBackupFilesDir`.
  *
- * Format: a `pairloom-paired-v2` header line, then one tab-separated line per phone:
+ * Format: a `pairloom-paired-v3` header line, then one tab-separated line per phone:
  * fingerprint hex, install ID hex, URL-safe base64 of the UTF-8 name, paired-at epoch ms, group
- * name and group passphrase (both `-` until known). Version 1 files (the first four fields only)
- * are still read. Anything else makes [load] fail closed with [TrustStoreException].
+ * name and group passphrase (both `-` until known), and its Wi-Fi channel in MHz on the last link
+ * (0 if unknown). Version 1 (first four fields) and version 2 (first six) files are still read. Anything else makes [load] fail closed with [TrustStoreException].
  */
 class PairedDeviceStore(private val file: File) {
     private val lock = Any()
@@ -52,11 +54,12 @@ class PairedDeviceStore(private val file: File) {
     }
 
     /** Stores the group of the paired phone with [fingerprintHex]; returns false if it is not paired. */
-    fun updateGroup(fingerprintHex: String, groupName: String, passphrase: String): Boolean = synchronized(lock) {
+    fun updateGroup(fingerprintHex: String, groupName: String, passphrase: String, staFrequencyMhz: Int = 0): Boolean = synchronized(lock) {
         val all = load()
         val current = all.firstOrNull { it.fingerprintHex == fingerprintHex } ?: return false
-        if (current.groupName == groupName && current.groupPassphrase == passphrase) return true
-        write(all.map { if (it === current) it.copy(groupName = groupName, groupPassphrase = passphrase) else it })
+        val updated = current.copy(groupName = groupName, groupPassphrase = passphrase, staFrequencyMhz = staFrequencyMhz.coerceIn(0, 65535))
+        if (updated == current) return true
+        write(all.map { if (it === current) updated else it })
         true
     }
 
@@ -84,7 +87,8 @@ class PairedDeviceStore(private val file: File) {
     }
 
     companion object {
-        const val HEADER = "pairloom-paired-v2"
+        const val HEADER = "pairloom-paired-v3"
+        const val HEADER_V2 = "pairloom-paired-v2"
         const val HEADER_V1 = "pairloom-paired-v1"
         private const val NONE = "-"
 
@@ -96,14 +100,16 @@ class PairedDeviceStore(private val file: File) {
                 append(d.fingerprintHex).append('\t').append(d.installIdHex).append('\t')
                     .append(name).append('\t').append(d.pairedAtMs).append('\t')
                     .append(if (hasGroup) d.groupName else NONE).append('\t')
-                    .append(if (hasGroup) d.groupPassphrase else NONE).append('\n')
+                    .append(if (hasGroup) d.groupPassphrase else NONE).append('\t')
+                    .append(d.staFrequencyMhz).append('\n')
             }
         }
 
         fun parse(text: String): List<PairedDevice> {
             val lines = text.split('\n').filter { it.isNotEmpty() }
             val fields = when (lines.firstOrNull()) {
-                HEADER -> 6
+                HEADER -> 7
+                HEADER_V2 -> 6
                 HEADER_V1 -> 4
                 else -> throw TrustStoreException("unknown paired-device file format")
             }
@@ -121,12 +127,17 @@ class PairedDeviceStore(private val file: File) {
                 val pairedAt = at.toLongOrNull() ?: throw TrustStoreException("bad time on line ${i + 1}")
                 var groupName: String? = null
                 var groupPass: String? = null
-                if (fields == 6 && !(parts[4] == NONE && parts[5] == NONE)) {
+                if (fields >= 6 && !(parts[4] == NONE && parts[5] == NONE)) {
                     if (!GroupCredentials.isValid(parts[4], parts[5])) throw TrustStoreException("bad group on line ${i + 1}")
                     groupName = parts[4]
                     groupPass = parts[5]
                 }
-                PairedDevice(fp.lowercase(), id.lowercase(), name, pairedAt, groupName, groupPass)
+                val frequency = if (fields == 7) {
+                    parts[6].toIntOrNull()?.takeIf { it in 0..65535 } ?: throw TrustStoreException("bad frequency on line ${i + 1}")
+                } else {
+                    0
+                }
+                PairedDevice(fp.lowercase(), id.lowercase(), name, pairedAt, groupName, groupPass, frequency)
             }
             if (devices.map { it.fingerprintHex }.toSet().size != devices.size ||
                 devices.map { it.installIdHex }.toSet().size != devices.size

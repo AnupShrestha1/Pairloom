@@ -171,7 +171,7 @@ class ControlProtocolTest {
             Message.Confirm(true), Message.Confirm(false),
             Message.MediaOffer(1, 3, 1, value32, "01020304"), Message.MediaOffer(0, 1, 2, value32, "01020304"),
             Message.MediaAnswer(1, 65535, "cd".repeat(32), "ffffffff"), Message.MediaAnswer(0, 9, value32, "00000000"),
-            Message.GroupInfo("DIRECT-ab-Pairloom", "Abcdefgh12345678"), Message.MediaStop,
+            Message.GroupInfo("DIRECT-ab-Pairloom", "Abcdefgh12345678"), Message.GroupInfo("DIRECT-ab-Pairloom", "Abcdefgh12345678", 2437), Message.MediaStop,
         )) {
             assertEquals(m, roundTrip(m))
         }
@@ -195,6 +195,7 @@ class ControlProtocolTest {
             frame(13),                      // GROUP_INFO empty
             frame(13, 3, 'a'.code, 'b'.code, 'c'.code, 8, *IntArray(8) { 'x'.code }), // not a Pairloom group name
             frame(13, 18, *"DIRECT-ab-Pairloom".map { it.code }.toIntArray(), 9, *IntArray(8) { 'x'.code }), // length runs past the end
+            frame(13, 18, *"DIRECT-ab-Pairloom".map { it.code }.toIntArray(), 8, *IntArray(8) { 'x'.code }), // no frequency
         )
         for (bytes in bad) {
             assertThrows(ControlProtocol.ProtocolException::class.java) { ControlProtocol.read(ByteArrayInputStream(bytes)) }

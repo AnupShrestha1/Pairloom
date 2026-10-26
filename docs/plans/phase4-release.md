@@ -129,7 +129,7 @@ interrupting phone call) carry over and are done in R5.
    minutes unplugged, a wired or USB headset during a call, and a phone call arriving during a
    Pairloom call.
 5. **Older Android** (8-11) phones, if available.
-6. **Feature graphic** (1024x500) for the listing.
+6. ~~Feature graphic~~: done (`docs/play/feature-graphic.png`).
 
 ## Automatic roles (2026-10-26)
 - A paired phone's card has a single **Connect**, tapped on both phones in any order. The roles
@@ -149,3 +149,19 @@ interrupting phone call) carry over and are done in R5.
 | A03s (joins) | 10 s | 6.4 s |
 | Redmi (hosts) | 3 s | 10.1 s |
 | Both | 0 s | 6.5 s |
+- **Group channel**: with automatic roles the Redmi (lower key) hosts. Asked only for "2.4 GHz",
+  it picked 2462 MHz while the A03s's own Wi-Fi was on 2437 MHz. The A03s's single radio then
+  time-shared two channels, and the call delay rose from about 200 to 405 ms. Now each phone sends
+  its Wi-Fi channel with GROUP_INFO (protocol version 6). The receiver stores it with the pairing
+  (paired-device file v3; v1 and v2 still read). A host whose own Wi-Fi is not on 2.4 GHz uses the
+  other phone's last 2.4 GHz channel.
+
+| Run | Group channel | Call: estimated one-way | Push-to-talk spread |
+|---|---|---|---|
+| First Connect (channel not yet known) | 2462 MHz (A03s on 2437) | 405 ms | 323 ms |
+| Second Connect | the A03s's channel | 202 ms | 112 ms |
+
+## Feature graphic
+`docs/play/feature-graphic.png` (1024x500), drawn by `docs/play/make_feature_graphic.py` from the
+icon's two rings. It uses Pillow's bundled public-domain font, so there are no font licence
+questions.

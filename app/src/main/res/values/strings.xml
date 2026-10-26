@@ -13,7 +13,6 @@
 
     <!-- Idle -->
     <string name="status_idle_title">Ready</string>
-    <string name="role_hint">Open Pairloom on both phones. Tap Host on one phone and Join on the other.</string>
     <string name="cleaning_up">Cleaning up the previous Wi-Fi Direct connection…</string>
 
     <!-- Permissions -->
@@ -112,7 +111,6 @@
     <string name="ptt_quiet">Nobody is talking</string>
     <string name="home_paired_title">Your phones</string>
     <string name="btn_connect">Connect</string>
-    <string name="btn_be_ready">Be ready</string>
     <string name="home_paired_hint">Tap Connect on both phones, in any order.</string>
     <string name="home_paired_hint_first">Tap Connect on both phones. The first time, one of them may show the list of nearby phones: pick %1$s there, and accept the prompt if one appears. After that, Connect needs nothing else.</string>
     <string name="status_waiting_for">Connecting to %1$s</string>
@@ -145,7 +143,6 @@
     <string name="media_title">Media link test (tone, no microphone)</string>
     <string name="btn_start_tone">Start test tone</string>
     <string name="btn_stop_tone">Stop test tone</string>
-    <string name="media_starting">Starting…</string>
     <string name="media_packets">%5$s · packets sent %1$d, received %2$d · frames lost %3$d (%4$s%%)</string>
     <string name="btn_opus_on">Opus: on</string>
     <string name="btn_opus_off">Opus: off (PCM)</string>

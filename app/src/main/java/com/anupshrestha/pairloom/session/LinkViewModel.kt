@@ -283,6 +283,26 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private var directRetryJob: Job? = null
 
+    /** For a host started by Connect: the other phone's Wi-Fi channel on the last link, if 2.4 GHz. */
+    @Volatile private var peerChannelHint: Int? = null
+
+    /**
+     * The channel to ask for when hosting. This phone's own Wi-Fi channel if it is a 2.4 GHz one
+     * (so this phone does not time-share two channels). Otherwise the other phone's last 2.4 GHz
+     * channel, so the other phone does not. Seen: with the Redmi hosting on 2462 MHz and the A03s's
+     * Wi-Fi on 2437 MHz, the A03s's single radio time-shared and the call delay rose from about
+     * 200 to 370 ms. Otherwise null (any 2.4 GHz channel).
+     */
+    private fun groupChannel(): Int? {
+        val own = staFrequencyMhz()
+        val hint = peerChannelHint
+        return when {
+            own != null && own in 2412..2484 -> own
+            hint != null -> hint.also { log("Using ${it} MHz, the other phone's Wi-Fi channel on the last link") }
+            else -> own
+        }
+    }
+
     /**
      * One direct-join request. A request made before the host's group exists never finds it later
      * (seen on the Redmi: it waited the full minute although the host was up after 15 s), so while
@@ -330,6 +350,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             when {
                 host -> {
                     log("Connect: this phone hosts for ${device.name} (lower key)")
+                    peerChannelHint = device.staFrequencyMhz.takeIf { it in 2412..2484 }
                     start(Role.HOST)
                 }
                 device.groupName != null && Build.VERSION.SDK_INT >= 29 -> {
@@ -603,7 +624,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun onGroupInfo(info: ControlProtocol.Message.GroupInfo) {
         val sec = security ?: return
         val peer = linkedPeerFingerprint ?: return
-        val stored = runCatching { sec.store.updateGroup(peer, info.networkName, info.passphrase) }
+        val stored = runCatching { sec.store.updateGroup(peer, info.networkName, info.passphrase, info.staFrequencyMhz) }
         stored.onSuccess { if (it) log("Stored the other phone's group (${info.networkName}) for joining directly") }
             .onFailure { log("Could not store the other phone's group: ${it.message}") }
         refreshPaired()
@@ -748,7 +769,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val c = controller ?: return
         requestedAtMs = SystemClock.elapsedRealtime()
         val own = security?.ownGroup ?: GroupCredentials.generate()
-        c.createGroup(own, staFrequencyMhz()) { result ->
+        c.createGroup(own, groupChannel()) { result ->
             if (gen != generation) return@createGroup
             when {
                 result.ok -> log("createGroup accepted by the system; waiting for the group to form")
@@ -1198,7 +1219,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         // Tell the (authenticated, paired) peer this phone's group, so it can join directly later.
         security?.ownGroup?.let { own ->
             viewModelScope.launch(Dispatchers.IO) {
-                runCatching { ch.sendMessage(ControlProtocol.Message.GroupInfo(own.networkName, own.passphrase)) }
+                runCatching { ch.sendMessage(ControlProtocol.Message.GroupInfo(own.networkName, own.passphrase, staFrequencyMhz() ?: 0)) }
                     .onFailure { log("Could not send this phone's group: ${it.message}") }
             }
         }
@@ -1282,6 +1303,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         mediaPollJob = null
         directRetryJob?.cancel()
         directRetryJob = null
+        peerChannelHint = null
         holdWifiLock(false)
         val m = media
         media = null
