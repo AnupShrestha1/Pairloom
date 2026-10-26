@@ -169,7 +169,7 @@ questions.
 ## Review fixes (2026-10-26)
 - The direct-join retry no longer cancels the join while Android already lists this phone in the
   chosen group without the "formed" broadcast (the A03s case behind the join fallback). Before
-  this, a join that had worked could be undone every 5 s. Not yet re-checked on the phones: the
-  device run was interrupted because the Redmi was in use.
+  this, a join that had worked could be undone every 5 s. Re-checked on the phones (A03s tapped
+  Connect 10 s before the Redmi): linked 6.4 s after the second tap, with no prompt.
 - The jitter buffer drops pending stretch credit when playout stops (rebuffer or spurt end). This
   is defensive: credit is normally used up before that happens.
