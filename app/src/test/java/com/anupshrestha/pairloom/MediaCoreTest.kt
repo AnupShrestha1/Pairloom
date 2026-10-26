@@ -217,6 +217,22 @@ class MediaCoreTest {
         assertEquals("late once the delay has grown", 0, lateLater)
     }
 
+    @Test
+    fun aRebufferClearsPendingStretches() {
+        // Late frames earn stretch credit, then the stream stops long enough to rebuffer. After the
+        // rebuffer the delay is rebuilt by buffering, so no stretch frames may follow.
+        val jb = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 30, rebufferAfterMissing = 4)
+        for (i in 0L..2L) jb.push(i, frame(i), i * 10 * ms)
+        repeat(3) { jb.pop() } // plays 0..2
+        jb.pop(); jb.pop() // 3 and 4 missing
+        jb.push(3, frame(3), 60 * ms); jb.push(4, frame(4), 60 * ms) // late: credit 2
+        repeat(4) { jb.pop() } // 5.. missing, empty buffer: rebuffer
+        for (i in 100L..102L) jb.push(i, frame(i), i * 10 * ms)
+        val out = (1..3).map { jb.pop() }
+        assertTrue("no stretch after a rebuffer: $out", out.none { it == Playout.Stretch })
+        assertEquals(100L, (out.first() as Playout.Frame).index)
+    }
+
     // --- push-to-talk spurts ------------------------------------------------------------------
 
     private fun drain(jb: JitterBuffer, periods: Int) = (1..periods).map { jb.pop() }

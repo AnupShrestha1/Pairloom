@@ -326,9 +326,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         directRetryJob = viewModelScope.launch {
             delay(DIRECT_RETRY_MS)
             if (gen != generation || groupFormed || socketsStarted || _ui.value.link !is LinkState.Connecting) return@launch
+            // Android already lists this phone in the group, without the "formed" broadcast (seen on
+            // the A03s): cancelling now would undo a join that worked. The join fallback takes over.
+            if (clientSinceMs != null) return@launch
             if (attempt == 1) log("${target.name}'s group is not there yet; asking again every ${DIRECT_RETRY_MS / 1000} s")
             c.cancelConnect {
-                if (gen == generation && !groupFormed && _ui.value.link is LinkState.Connecting) {
+                if (gen == generation && !groupFormed && clientSinceMs == null && _ui.value.link is LinkState.Connecting) {
                     directJoinAttempt(credentials, target, gen, attempt + 1)
                 }
             }

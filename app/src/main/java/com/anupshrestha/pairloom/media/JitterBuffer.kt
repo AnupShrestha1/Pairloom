@@ -142,6 +142,7 @@ class JitterBuffer(
                 spurtEnd = lastIndex
             } else if (frames.isEmpty()) {
                 playing = false // already played past it (concealing the silence): stop now
+                stretchCredit = 0
             }
         } else if (frames.isNotEmpty() && frames.firstKey() <= lastIndex) {
             spurtEnd = lastIndex // a spurt still buffering; play it even if it is short
@@ -200,6 +201,7 @@ class JitterBuffer(
         consecutiveMissing++
         if (consecutiveMissing >= rebufferAfterMissing && frames.isEmpty()) {
             playing = false
+            stretchCredit = 0 // the rebuffer itself restores the delay
         }
         return Playout.Missing(index)
     }
