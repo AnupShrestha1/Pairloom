@@ -78,6 +78,7 @@ class MainActivity : ComponentActivity() {
             onToggleOpus = viewModel::toggleOpus,
             onJoinPaired = viewModel::joinPaired,
             onConnectPaired = { fp -> requestThen { viewModel.connectPaired(fp) } },
+            onConnectAuto = { fp -> requestThen { viewModel.connectAuto(fp) } },
         )
         setContent {
             PairloomTheme {

@@ -15,16 +15,17 @@ Status: 0.3.0, a working prototype, not yet on Google Play. The release work is 
 - **Calls.** Full-duplex voice on the earpiece, loudspeaker or a wired/USB headset. The platform's
   echo cancellation, noise suppression and gain control are used.
 - **Push-to-talk.** Hold to talk on the loudspeaker. The other phone shows who is talking.
-- **Joining a paired phone directly.** Once two phones have linked, the joining phone can connect
-  without the system's "Invitation to connect" prompt on the host.
+- **One-tap reconnect.** Paired phones connect with Connect on both, with no system prompt: the
+  phones agree on who hosts from their keys.
 - Shows why a call ended, and warns when nothing has been heard from the other phone for a second.
 
 ## How to use it
 1. Install the app on both phones and open it on both.
-2. On one phone tap **Host**. On the other tap **Join**, then pick the first phone (or
-   **Join <phone> directly** for a phone you have paired before). Accept the connection prompt on
-   the host if one appears.
-3. The first time, compare the 6-digit codes and confirm on both phones.
+2. The first time: tap **Host** on one phone and **Join** on the other, pick the first phone,
+   accept the connection prompt on the host if one appears, then compare the 6-digit codes and
+   confirm on both phones.
+3. After that: tap **Connect** on both phones, in any order. They pick their roles themselves and
+   connect without any prompt.
 4. Tap **Call** or **Push-to-talk**. The other phone accepts.
 
 Calls end when the app leaves the screen (version 1 is foreground only).

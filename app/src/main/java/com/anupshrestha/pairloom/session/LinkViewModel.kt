@@ -269,15 +269,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             setLink(LinkState.Connecting(device.name))
             log("Joining ${device.name} directly (group $name); no prompt on the other phone")
             val target = PeerInfo(device.name, "", WifiP2pDevice.AVAILABLE, isPhone = true)
-            c.connectToGroup(GroupCredentials(name, pass)) { result ->
-                if (gen != generation) return@connectToGroup
-                if (result.ok) {
-                    log("Direct join accepted by the system; waiting for the group to form")
-                    startGroupPoll(target, gen)
-                } else {
-                    onOperationFailed("connect(group)", result)
-                }
-            }
+            directJoinAttempt(GroupCredentials(name, pass), target, gen, attempt = 1)
             timeoutJob?.cancel()
             timeoutJob = viewModelScope.launch {
                 delay(CONNECT_TIMEOUT_MS)
@@ -286,6 +278,71 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                     fail(FailureKind.CONNECT_TIMEOUT, null)
                 }
             }
+        }
+    }
+
+    private var directRetryJob: Job? = null
+
+    /**
+     * One direct-join request. A request made before the host's group exists never finds it later
+     * (seen on the Redmi: it waited the full minute although the host was up after 15 s), so while
+     * no group has formed the request is cancelled and made again every [DIRECT_RETRY_MS].
+     */
+    private fun directJoinAttempt(credentials: GroupCredentials, target: PeerInfo, gen: Int, attempt: Int) {
+        val c = controller ?: return
+        c.connectToGroup(credentials) { result ->
+            if (gen != generation) return@connectToGroup
+            when {
+                result.ok && attempt == 1 -> {
+                    log("Direct join accepted by the system; waiting for the group to form")
+                    startGroupPoll(target, gen)
+                }
+                result.ok -> Unit
+                result.reason == WifiP2pManager.BUSY -> Unit // the next round asks again
+                else -> onOperationFailed("connect(group)", result)
+            }
+        }
+        directRetryJob?.cancel()
+        directRetryJob = viewModelScope.launch {
+            delay(DIRECT_RETRY_MS)
+            if (gen != generation || groupFormed || socketsStarted || _ui.value.link !is LinkState.Connecting) return@launch
+            if (attempt == 1) log("${target.name}'s group is not there yet; asking again every ${DIRECT_RETRY_MS / 1000} s")
+            c.cancelConnect {
+                if (gen == generation && !groupFormed && _ui.value.link is LinkState.Connecting) {
+                    directJoinAttempt(credentials, target, gen, attempt + 1)
+                }
+            }
+        }
+    }
+
+    /**
+     * Home screen "Connect" for a paired phone, tapped on both phones in any order. The roles follow
+     * from the two key fingerprints, which both phones know, so no message is needed: the phone with
+     * the lower fingerprint hosts, the other joins its group directly (retrying until it is up).
+     * Without the other phone's group, this phone joins through the normal list instead.
+     */
+    fun connectAuto(peerFingerprintHex: String) {
+        val sec = security ?: return
+        viewModelScope.launch {
+            val device = withContext(Dispatchers.IO) { runCatching { sec.store.load() }.getOrNull() }
+                ?.firstOrNull { it.fingerprintHex == peerFingerprintHex } ?: return@launch
+            val host = sec.identity.fingerprintHex.lowercase() < peerFingerprintHex.lowercase()
+            when {
+                host -> {
+                    log("Connect: this phone hosts for ${device.name} (lower key)")
+                    start(Role.HOST)
+                }
+                device.groupName != null && Build.VERSION.SDK_INT >= 29 -> {
+                    log("Connect: this phone joins ${device.name} directly (higher key)")
+                    connectPaired(peerFingerprintHex)
+                }
+                else -> {
+                    log("Connect: no group known for ${device.name}; pick it from the list")
+                    start(Role.JOIN)
+                }
+            }
+            // After starting: a start clears this while the link is not yet active.
+            if (_ui.value.link.isActive) _ui.update { it.copy(waitingFor = device.name) }
         }
     }
 
@@ -1223,6 +1280,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         pendingPairing = null
         mediaPollJob?.cancel()
         mediaPollJob = null
+        directRetryJob?.cancel()
+        directRetryJob = null
         holdWifiLock(false)
         val m = media
         media = null
@@ -1262,7 +1321,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun setLink(state: LinkState) {
         _ui.update { it.copy(link = state) }
-        if (!state.isActive) pendingDirectJoin = null
+        if (!state.isActive) {
+            pendingDirectJoin = null
+            if (_ui.value.waitingFor != null) _ui.update { it.copy(waitingFor = null) }
+        }
     }
 
     private fun refreshLocation() {
@@ -1356,5 +1418,6 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val ADDRESS_POLL_MS = 100L
         const val MEDIA_POLL_MS = 500L
         const val PTT_POLL_MS = 100L
+        const val DIRECT_RETRY_MS = 5_000L
     }
 }

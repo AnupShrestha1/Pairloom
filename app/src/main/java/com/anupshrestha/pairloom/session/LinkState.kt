@@ -192,6 +192,8 @@ data class LinkUiState(
     val pairedDevices: List<PairedDeviceUi> = emptyList(),
     /** The user refused the microphone permission; calls cannot start. */
     val micDenied: Boolean = false,
+    /** The paired phone a home-screen Connect is waiting for (until the link ends). */
+    val waitingFor: String? = null,
     /** Diagnostics: whether this phone offers Opus for voice. */
     val opusEnabled: Boolean = false,
 )

@@ -152,15 +152,24 @@ class WifiDirectController(
         }
         // Running the group on the same channel as this phone's normal Wi-Fi connection avoids
         // multi-channel time sharing, which delivers packets in bursts (measured in milestone A1).
-        val frequency = preferredFrequencyMhz?.takeIf { it in 2412..2484 || it in 5160..5885 }
+        // Only a 2.4 GHz channel is reused: some phones (the Galaxy A03s) have no 5 GHz radio, so a
+        // group on 5 GHz would shut them out. Otherwise the group is asked for on the 2.4 GHz band.
+        val frequency = preferredFrequencyMhz?.takeIf { it in 2412..2484 }
         val config = try {
             WifiP2pConfig.Builder()
                 .setNetworkName(credentials.networkName)
                 .setPassphrase(credentials.passphrase)
                 .enablePersistentMode(false)
-                .apply { if (frequency != null) setGroupOperatingFrequency(frequency) }
+                .apply {
+                    if (frequency != null) setGroupOperatingFrequency(frequency) else setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+                }
                 .build()
-                .also { if (frequency != null) log("Asking for the group on $frequency MHz (this phone's Wi-Fi channel)") }
+                .also {
+                    log(
+                        if (frequency != null) "Asking for the group on $frequency MHz (this phone's Wi-Fi channel)"
+                        else "Asking for the group on the 2.4 GHz band",
+                    )
+                }
         } catch (e: IllegalArgumentException) {
             if (frequency != null) {
                 log("Group config for $frequency MHz rejected (${e.message}); trying without a fixed channel")

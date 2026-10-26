@@ -89,6 +89,8 @@ class ConnectionActions(
     val onJoinPaired: (String) -> Unit,
     /** From the home screen: connect to a paired phone that is ready (by key fingerprint). */
     val onConnectPaired: (String) -> Unit,
+    /** From the home screen: Connect on both phones; the roles are picked automatically. */
+    val onConnectAuto: (String) -> Unit,
 )
 
 @Composable
@@ -109,7 +111,7 @@ fun ConnectionScreen(
         Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
         Text(text = stringResource(R.string.home_tagline), style = MaterialTheme.typography.bodyMedium)
 
-        if (link !is LinkState.Idle) StatusCard(link)
+        if (link !is LinkState.Idle) StatusCard(link, ui.waitingFor)
 
         if (ui.cleaningUp) {
             Text(text = stringResource(R.string.cleaning_up), style = MaterialTheme.typography.bodySmall)
@@ -189,18 +191,11 @@ private fun PairedPhonesHome(ui: LinkUiState, canStart: Boolean, actions: Connec
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(text = d.name, style = MaterialTheme.typography.titleLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = { if (d.canJoinDirectly) actions.onConnectPaired(d.fingerprintHex) else actions.onJoin() },
-                        enabled = canStart,
-                        modifier = Modifier.weight(1f).heightIn(min = 52.dp),
-                    ) { Text(stringResource(R.string.btn_connect)) }
-                    OutlinedButton(
-                        onClick = actions.onHost,
-                        enabled = canStart,
-                        modifier = Modifier.weight(1f).heightIn(min = 52.dp),
-                    ) { Text(stringResource(R.string.btn_be_ready)) }
-                }
+                Button(
+                    onClick = { actions.onConnectAuto(d.fingerprintHex) },
+                    enabled = canStart,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                ) { Text(stringResource(R.string.btn_connect), style = MaterialTheme.typography.titleMedium) }
                 Text(
                     text = stringResource(if (d.canJoinDirectly) R.string.home_paired_hint else R.string.home_paired_hint_first, d.name),
                     style = MaterialTheme.typography.bodySmall,
@@ -229,8 +224,12 @@ private fun NewPhoneCard(hasPaired: Boolean, canStart: Boolean, actions: Connect
 }
 
 @Composable
-private fun StatusCard(link: LinkState) {
-    val (title, body) = describe(link)
+private fun StatusCard(link: LinkState, waitingFor: String? = null) {
+    val (title, body) = if (waitingFor != null && (link is LinkState.Hosting || link is LinkState.Connecting || link is LinkState.Discovering)) {
+        stringResource(R.string.status_waiting_for, waitingFor) to stringResource(R.string.waiting_for_body, waitingFor)
+    } else {
+        describe(link)
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(text = title, style = MaterialTheme.typography.titleMedium)

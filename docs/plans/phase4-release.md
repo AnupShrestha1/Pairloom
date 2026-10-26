@@ -73,8 +73,7 @@ interrupting phone call) carry over and are done in R5.
   at start).
 - Device check, A03s "Be ready" and Redmi "Connect", 3 runs: linked every time in about 9 s, the
   script's polling included, with no host prompt. No crashes.
-- Not done: automatic roles. "Be ready" on one phone is still needed. Picking roles automatically
-  would need each phone to see the other's group before linking. Revisit after R3.
+- Automatic roles: done afterwards, see "Automatic roles" below.
 
 ## R3 results (2026-10-17)
 - **Tap to talk**: push-to-talk can work by tapping (tap to start, tap to stop) instead of
@@ -131,3 +130,22 @@ interrupting phone call) carry over and are done in R5.
    Pairloom call.
 5. **Older Android** (8-11) phones, if available.
 6. **Feature graphic** (1024x500) for the listing.
+
+## Automatic roles (2026-10-26)
+- A paired phone's card has a single **Connect**, tapped on both phones in any order. The roles
+  come from the two key fingerprints, which both phones already know: the lower one hosts, and the
+  higher one joins the host's group directly. No message or extra step is needed.
+- A direct join made before the host's group exists never finds it later: tested, it waited the
+  full minute although the host was up after 15 s. The joiner therefore cancels and asks again
+  every 5 s until the group forms.
+- The host now reuses its own Wi-Fi channel only if it is on 2.4 GHz, and otherwise asks for the
+  2.4 GHz band. A group on 5 GHz would shut out phones without 5 GHz, like the A03s.
+- A phone without the other's group (paired before direct join existed) falls back to the list of
+  nearby phones once; after that link, Connect needs nothing else.
+- Device check (the Redmi has the lower key and hosts; no prompt in any run):
+
+| Tapped first | Gap | Linked after the second tap |
+|---|---|---|
+| A03s (joins) | 10 s | 6.4 s |
+| Redmi (hosts) | 3 s | 10.1 s |
+| Both | 0 s | 6.5 s |
