@@ -101,6 +101,11 @@ numeric-comparison argument, with TLS providing the key-possession proof.
 - Forgetting a paired phone replaces this phone's group, so the forgotten phone can no longer join
   directly. The remaining paired phones receive the new group on their next link.
 - The passphrase is never logged or shown (`toString` hides it everywhere).
+- GROUP_INFO also carries the sender's current Wi-Fi channel (protocol version 6), stored with
+  the pairing (file v3). A host uses it to keep the group on the other phone's channel. It reveals
+  only which channel that phone's own Wi-Fi network uses, and only to a paired phone.
+- "Connect" on both phones picks the host by comparing the two key fingerprints. These are already
+  known to both phones, so nothing new is exchanged.
 
 ## Residual risks and limits
 - `DIGEST_NONE` widens what the key can sign for code running as the app; accepted because the
