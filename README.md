@@ -5,7 +5,7 @@ A local voice intercom for two Android phones. No internet, cloud servers, or ac
 The phones connect to each other over Wi-Fi Direct, with no router involved. Talk in a full-duplex
 call or with push-to-talk, while the app is open.
 
-Status: 0.4.0, a working prototype, not yet on Google Play. The release work is planned in
+Status: 0.5.0, a working prototype, not yet on Google Play. The release work is planned in
 [docs/plans/phase4-release.md](docs/plans/phase4-release.md).
 
 ## What it does
