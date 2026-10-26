@@ -448,6 +448,10 @@ class MediaSession(
                     verify?.let { if (out.payload.contentEquals(it.frame(out.index))) intact.incrementAndGet() else corrupted.incrementAndGet() }
                     out.payload
                 }
+                Playout.Stretch -> {
+                    concealed.incrementAndGet()
+                    concealer.conceal(source.frameBytes)
+                }
                 is Playout.Missing -> {
                     concealed.incrementAndGet()
                     concealer.conceal(source.frameBytes)

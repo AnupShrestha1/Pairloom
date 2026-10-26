@@ -133,6 +133,7 @@ class MediaCoreTest {
         assertEquals(1L, (jb.pop() as Playout.Frame).index)
         assertEquals(Playout.Missing(2), jb.pop())
         assertEquals(PushResult.LATE, jb.push(2, frame(2), 40 * ms))
+        assertEquals(Playout.Stretch, jb.pop()) // too little delay: one frame of delay is added
         assertEquals(3L, (jb.pop() as Playout.Frame).index)
         assertEquals(PushResult.DUPLICATE, jb.push(5, frame(5), 50 * ms).let { jb.push(5, frame(5), 51 * ms) })
     }
@@ -192,6 +193,28 @@ class MediaCoreTest {
         while (jb.depthFrames > 0) jb.pop()
         repeat(4) { assertTrue(jb.pop() is Playout.Missing) }
         assertEquals(Playout.Buffering, jb.pop()) // stopped after 4 missing with an empty buffer
+    }
+
+    @Test
+    fun lateFramesStretchTheDelayUpToTheTarget() {
+        // Playout starts with the minimum delay (3 frames), then frames come in bursts of 5 that
+        // land up to 70 ms after their own time, more than the delay allows. Each late frame
+        // stretches playout by one frame until the delay covers the bursts; after that nothing is late.
+        val jb = JitterBuffer(10 * ms, minFrames = 3, maxFrames = 30)
+        fun arrivalPeriod(i: Long): Long = if (i < 3) i else (i / 5) * 5 + 7
+        var lateEarly = 0
+        var lateLater = 0
+        for (period in 0L until 300L) {
+            for (i in 0L until 400L) {
+                if (arrivalPeriod(i) == period && jb.push(i, frame(i), period * 10 * ms) == PushResult.LATE) {
+                    if (period < 150) lateEarly++ else lateLater++
+                }
+            }
+            jb.pop()
+        }
+        assertTrue("stretched ${jb.stretched}", jb.stretched > 0)
+        assertTrue("late at first ${lateEarly}", lateEarly > 0)
+        assertEquals("late once the delay has grown", 0, lateLater)
     }
 
     // --- push-to-talk spurts ------------------------------------------------------------------

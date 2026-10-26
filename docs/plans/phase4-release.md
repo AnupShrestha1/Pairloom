@@ -90,3 +90,20 @@ interrupting phone call) carry over and are done in R5.
   talking", and a second tap brought back "Nobody is talking", with a clean spurt in the log.
 - Not checked on a phone: TalkBack itself and 200 % font scale. Both are system settings the user
   turns on; to be done by hand.
+
+## R4 results (2026-10-26)
+- Release builds run R8 and resource shrinking. No keep rules were needed: no reflection-based
+  libraries, and only platform crypto. Profile APK 1.1 MB instead of 8.5 MB; release bundle 2.5 MB.
+- Release signing reads `keystore.properties` (git-ignored), with the passwords optionally from
+  environment variables. Without it the bundle is unsigned. Steps are in `docs/release.md`. The
+  upload key is the user's to create.
+- Offline builds skip lint vital (`-x ...`, documented). The Compose mapping file is switched off,
+  because it needs an artifact the offline cache does not have.
+- Shrunk build on both phones: direct-join link, a call ("Call ended by …" shown on the other
+  phone) and tap-to-talk all worked, with no crashes.
+- **Found and fixed during this check**: in push-to-talk, 22 % of frames were concealed. A spurt
+  starts with the minimum 30 ms delay, before the spread is known. When the target then rose, the
+  buffer could only add delay by rebuffering after 10 missing frames, so frames kept arriving after
+  their turn. Now each late frame, while the buffer is below its target, stretches playout by one
+  concealed frame (`Playout.Stretch`). Rerun: late frames 174 -> 29, concealed 22 % -> 4.8 %, calls
+  unchanged (2.3 %).

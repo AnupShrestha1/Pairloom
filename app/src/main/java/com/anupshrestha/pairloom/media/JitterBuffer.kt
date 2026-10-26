@@ -13,6 +13,12 @@ sealed interface Playout {
 
     /** The frame for [index] did not arrive in time; conceal it. */
     data class Missing(val index: Long) : Playout
+
+    /**
+     * Frames are arriving too late for the current delay: play one concealment frame without
+     * advancing, which adds one frame of delay.
+     */
+    data object Stretch : Playout
 }
 
 enum class PushResult { ACCEPTED, LATE, DUPLICATE }
@@ -87,6 +93,15 @@ class JitterBuffer(
     var dropped = 0L
         private set
 
+    /** Concealment frames inserted to grow the delay ([Playout.Stretch]). */
+    var stretched = 0L
+        private set
+
+    private var stretchCredit = 0
+
+    /** Frames of an ended spurt that arrive afterwards are not a sign of too little delay. */
+    private var endedBefore = -1L
+
     val depthFrames: Int get() = frames.size
 
     val targetFrames: Int
@@ -97,7 +112,11 @@ class JitterBuffer(
         }
 
     fun push(index: Long, payload: ByteArray, arrivalNanos: Long): PushResult {
-        if (index < nextIndex) return PushResult.LATE // also after a spurt ended or a rebuffer
+        if (index < nextIndex) {
+            // Late while playing below the target delay: let playout fall back one frame (see pop).
+            if (playing && index > endedBefore) stretchCredit = minOf(stretchCredit + 1, maxFrames)
+            return PushResult.LATE // also after a spurt ended or a rebuffer
+        }
         if (frames.containsKey(index)) return PushResult.DUPLICATE
         if (lastIndex >= 0 && index > lastIndex) {
             val d = (arrivalNanos - lastArrivalNanos) - (index - lastIndex) * frameNanos
@@ -136,6 +155,8 @@ class JitterBuffer(
                 // The spurt has been played; wait for the next one.
                 playing = false
                 spurtEnd = null
+                stretchCredit = 0
+                endedBefore = end
                 while (frames.isNotEmpty() && frames.firstKey() <= end) frames.remove(frames.firstKey())
             }
         }
@@ -148,6 +169,17 @@ class JitterBuffer(
             playing = true
             nextIndex = frames.firstKey()
             consecutiveMissing = 0
+        }
+        // Frames arrived late and the buffer holds less than the target: the delay is too short (as at
+        // the start of a push-to-talk spurt, before the spread is known). Stretch by one frame per late
+        // frame until the target is reached; the trim below brings the delay back down later.
+        if (stretchCredit > 0) {
+            if (frames.size < targetFrames) {
+                stretchCredit--
+                stretched++
+                return Playout.Stretch
+            }
+            stretchCredit = 0
         }
         // Persistently over target: drop one old frame now and then to bring latency down. Not
         // once the spurt's end is known: the rest of it is played whole, then playout pauses anyway.
