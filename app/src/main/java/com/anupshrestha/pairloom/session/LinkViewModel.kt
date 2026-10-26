@@ -52,6 +52,10 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import com.anupshrestha.pairloom.LinkNotice
+import com.anupshrestha.pairloom.LinkService
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -88,6 +92,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _ui = MutableStateFlow(LinkUiState(locationServicesOn = isLocationOn()))
     val ui: StateFlow<LinkUiState> = _ui.asStateFlow()
+
+    /**
+     * Whether the activity is on screen: an incoming call alerts with a notification only when it is
+     * not. Declared before init, which collects it.
+     */
+    private val appVisible = MutableStateFlow(true)
 
     // Written on the main thread; generation and linkedAtMs are also read from IO threads.
     @Volatile private var generation = 0
@@ -139,6 +149,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingPairing: CompletableDeferred<Boolean>? = null
 
     init {
+        // The foreground service and its notification follow the link (main thread).
+        viewModelScope.launch {
+            combine(ui, appVisible) { state, visible -> noticeFor(state, visible) }
+                .distinctUntilChanged()
+                .collect { LinkService.sync(app, it) }
+        }
         viewModelScope.launch {
             val loaded = withContext(Dispatchers.IO) {
                 runCatching {
@@ -370,6 +386,46 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private var reconnectJob: Job? = null
+
+    /**
+     * After a dropped link: runs Connect again (same roles, from the keys) until the link is back
+     * or [RECONNECT_WINDOW_MS] has passed. The other phone does the same, since it saw the drop too.
+     */
+    private fun startReconnecting(peerFingerprintHex: String) {
+        reconnectJob?.cancel()
+        log("The link dropped; reconnecting for up to ${RECONNECT_WINDOW_MS / 1000} s")
+        reconnectJob = viewModelScope.launch {
+            val deadline = SystemClock.elapsedRealtime() + RECONNECT_WINDOW_MS
+            while (SystemClock.elapsedRealtime() < deadline) {
+                // Wait until the previous attempt has finished and Wi-Fi Direct is cleaned up.
+                while (_ui.value.cleaningUp || _ui.value.link.isActive) {
+                    if (_ui.value.link is LinkState.Linked) {
+                        log("Reconnected")
+                        _ui.update { it.copy(reconnectingTo = null) }
+                        return@launch
+                    }
+                    if (SystemClock.elapsedRealtime() >= deadline) break
+                    delay(500)
+                }
+                if (SystemClock.elapsedRealtime() >= deadline) break
+                connectAuto(peerFingerprintHex)
+                delay(2_000)
+            }
+            log("Could not reconnect within ${RECONNECT_WINDOW_MS / 1000} s")
+            _ui.update { it.copy(reconnectingTo = null) }
+            if (_ui.value.link.isActive && _ui.value.link !is LinkState.Linked) {
+                teardown(LinkState.Disconnected(DisconnectReason.LINK_TIMEOUT, null), sendBye = false)
+            }
+        }
+    }
+
+    private fun stopReconnecting() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        if (_ui.value.reconnectingTo != null) _ui.update { it.copy(reconnectingTo = null) }
+    }
+
     /** A direct join waiting for the join screen to open ([connectPaired]). */
     @Volatile private var pendingDirectJoin: String? = null
 
@@ -456,6 +512,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Cancels a session in progress, or disconnects an established link. */
     fun disconnect() {
+        stopReconnecting()
         val wasLinked = _ui.value.link is LinkState.Linked
         log(if (wasLinked) "Disconnecting" else "Cancelling")
         teardown(
@@ -537,9 +594,25 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Version 1 works only while the app is visible: leaving the app ends the call. */
     fun onAppHidden() {
-        if (media?.session != null || media?.isOffering == true || media?.incomingKind != null) {
-            log("The app left the foreground; ending the media session")
-            stopMedia()
+        appVisible.value = false
+        if (media?.session != null) log("The app left the screen; the session goes on in the background")
+    }
+
+    fun onAppShown() {
+        appVisible.value = true
+    }
+
+    /** What the ongoing notification ([LinkService]) shows for this state, or null without a link. */
+    private fun noticeFor(state: LinkUiState, visible: Boolean): LinkNotice? {
+        val reconnecting = state.reconnectingTo
+        if (reconnecting != null && state.link !is LinkState.Linked) return LinkNotice.Reconnecting(reconnecting)
+        val l = state.link as? LinkState.Linked ?: return null
+        val d = l.details
+        return when {
+            d.incomingCall && !visible -> LinkNotice.Incoming(d.peerName, pushToTalk = d.incomingKind == MediaKind.PTT)
+            d.mediaActive && d.mediaKind == MediaKind.VOICE -> LinkNotice.InCall(d.peerName, d.muted)
+            d.mediaActive && d.mediaKind == MediaKind.PTT -> LinkNotice.PushToTalk(d.peerName)
+            else -> LinkNotice.Linked(d.peerName)
         }
     }
 
@@ -1294,6 +1367,16 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      * so a new session cannot overlap the old one's cleanup.
      */
     private fun teardown(finalState: LinkState?, sendBye: Boolean) {
+        // A link to a paired phone that dropped (not one a user ended) is brought back by itself.
+        val linked = _ui.value.link as? LinkState.Linked
+        val droppedPeer = linkedPeerFingerprint.takeIf {
+            linked != null && finalState is LinkState.Disconnected && finalState.reason in DROP_REASONS
+        }
+        if (droppedPeer != null) {
+            media?.kind?.takeIf { media?.session != null && it != MediaKind.TONE }?.let { lastEnd = it to MediaEnd.LINK_LOST }
+            // Before the link state changes, so the notification (and the foreground service) stays.
+            _ui.update { it.copy(reconnectingTo = linked?.details?.peerName) }
+        }
         generation++
         timeoutJob?.cancel()
         discoveryHintJob?.cancel()
@@ -1333,6 +1416,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             registry.closeAll()
         }
         if (finalState != null) setLink(finalState)
+        if (droppedPeer != null) startReconnecting(droppedPeer)
         if (c != null) {
             _ui.update { it.copy(cleaningUp = true) }
             c.shutdown {
@@ -1374,26 +1458,33 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Keeps the Wi-Fi radio out of power saving while media runs (low-latency mode on Android 10+,
-     * high-performance mode before). Released when the media session ends.
+     * Keeps the Wi-Fi radio out of power saving while media runs. Android 10+ has the low-latency
+     * lock, but it only acts while the app is in front with the screen on. Up to Android 13 the
+     * older high-performance lock also works in the background (it does nothing from Android 14),
+     * so both are held where available. Released when the media session ends.
      */
-    private var wifiLock: WifiManager.WifiLock? = null
+    private val wifiLocks = mutableListOf<WifiManager.WifiLock>()
 
     @Suppress("DEPRECATION")
     private fun holdWifiLock(hold: Boolean) {
-        if (hold == (wifiLock != null)) return
+        if (hold == wifiLocks.isNotEmpty()) return
         if (!hold) {
-            runCatching { wifiLock?.release() }
-            wifiLock = null
-            log("Wi-Fi low-latency lock released")
+            wifiLocks.forEach { runCatching { it.release() } }
+            wifiLocks.clear()
+            log("Wi-Fi locks released")
             return
         }
         val wifi = app.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-        val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
-        runCatching {
-            wifiLock = wifi.createWifiLock(mode, "pairloom:media").apply { setReferenceCounted(false); acquire() }
-            log("Wi-Fi ${if (Build.VERSION.SDK_INT >= 29) "low-latency" else "high-performance"} lock held for media")
-        }.onFailure { log("Could not hold a Wi-Fi lock: ${it.message}") }
+        val modes = buildList {
+            if (Build.VERSION.SDK_INT >= 29) add(WifiManager.WIFI_MODE_FULL_LOW_LATENCY to "low-latency")
+            if (Build.VERSION.SDK_INT < 34) add(WifiManager.WIFI_MODE_FULL_HIGH_PERF to "high-performance")
+        }
+        for ((mode, name) in modes) {
+            runCatching {
+                wifiLocks += wifi.createWifiLock(mode, "pairloom:media-$name").apply { setReferenceCounted(false); acquire() }
+            }.onFailure { log("Could not hold the Wi-Fi $name lock: ${it.message}") }
+        }
+        log("Wi-Fi locks held for media: ${modes.joinToString { it.second }}")
     }
 
     @Suppress("DEPRECATION")
@@ -1444,5 +1535,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val MEDIA_POLL_MS = 500L
         const val PTT_POLL_MS = 100L
         const val DIRECT_RETRY_MS = 5_000L
+        const val RECONNECT_WINDOW_MS = 90_000L
+
+        /** How a link to a paired phone ends when nobody chose to end it. */
+        val DROP_REASONS = setOf(DisconnectReason.LINK_TIMEOUT, DisconnectReason.GROUP_ENDED, DisconnectReason.IO_ERROR)
     }
 }

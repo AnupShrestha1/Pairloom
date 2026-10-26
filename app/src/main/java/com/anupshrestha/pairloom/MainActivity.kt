@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
@@ -12,7 +13,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
@@ -27,7 +27,8 @@ import com.anupshrestha.pairloom.ui.ConnectionScreen
 import com.anupshrestha.pairloom.ui.theme.PairloomTheme
 
 class MainActivity : ComponentActivity() {
-    private val viewModel: LinkViewModel by viewModels()
+    /** The process-wide link ([PairloomApp]): it outlives this activity, so calls go on in the background. */
+    private val viewModel: LinkViewModel get() = (application as PairloomApp).link
 
     /** What the user tapped, run once the permission dialog has been answered with a grant. */
     private var pendingStart: (() -> Unit)? = null
@@ -90,6 +91,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.onAppShown()
+    }
+
     override fun onResume() {
         super.onResume()
         viewModel.onResume()
@@ -97,9 +103,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Version 1 is foreground-only: no call continues while the app is not visible. A rotation
-        // or other configuration change also stops the activity, but the call (held by the view
-        // model) must survive it.
+        // Calls go on in the background (the link lives in PairloomApp, LinkService keeps the process
+        // in the foreground). A configuration change is not the app being hidden.
         if (!isChangingConfigurations) viewModel.onAppHidden()
     }
 
@@ -128,13 +133,21 @@ class MainActivity : ComponentActivity() {
 
     private fun requestThen(action: () -> Unit) {
         val missing = P2pPermissions.missing(this)
-        if (missing.isEmpty()) {
+        // The notification permission is asked for once, together with the others, but never
+        // required: without it a call still goes on in the background, just without a notification.
+        val notifications = if (Build.VERSION.SDK_INT >= 33 && !askedNotifications &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
+        if (missing.isEmpty() && notifications.isEmpty()) {
             action()
         } else {
+            askedNotifications = true
             pendingStart = action
-            permissionLauncher.launch(missing.toTypedArray())
+            permissionLauncher.launch((missing + notifications).toTypedArray())
         }
     }
+
+    private var askedNotifications = false
 
     private fun openSettings(intent: Intent) {
         try {

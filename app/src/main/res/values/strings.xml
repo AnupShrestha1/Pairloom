@@ -109,6 +109,18 @@
     <string name="ptt_peer_talking">%1$s is talking</string>
     <string name="ptt_both_talking">You and %1$s are both talking</string>
     <string name="ptt_quiet">Nobody is talking</string>
+    <string name="channel_ongoing">Link and calls</string>
+    <string name="channel_ongoing_description">Shown while Pairloom is connected to another phone, so calls can go on in the background.</string>
+    <string name="channel_incoming">Incoming calls</string>
+    <string name="channel_incoming_description">When the other phone calls while Pairloom is not on screen.</string>
+    <string name="notice_linked">Connected to %1$s</string>
+    <string name="notice_linked_text">Open Pairloom to call or use push-to-talk.</string>
+    <string name="notice_call_text">Call in progress</string>
+    <string name="notice_muted">Microphone muted</string>
+    <string name="notice_ptt_text">Open Pairloom to talk.</string>
+    <string name="notice_incoming_text">Tap to open Pairloom and answer.</string>
+    <string name="notice_reconnecting">Reconnecting to %1$s…</string>
+    <string name="notice_reconnecting_text">The link dropped. Keep the phones close.</string>
     <string name="home_paired_title">Your phones</string>
     <string name="btn_connect">Connect</string>
     <string name="home_paired_hint">Tap Connect on both phones, in any order.</string>
@@ -137,6 +149,8 @@
     <string name="end_declined_by_peer">%1$s declined the %2$s.</string>
     <string name="end_failed">%1$s could not start: the audio could not be opened on one of the phones.</string>
     <string name="end_audio_taken">%1$s ended: another app or a phone call took the audio.</string>
+    <string name="end_link_lost">%1$s ended: the link to the other phone was lost.</string>
+    <string name="reconnecting_body">The link dropped, perhaps because the phones were too far apart. Both phones are trying to connect again for up to 90 seconds.</string>
     <string name="call_mic_denied">Pairloom needs the microphone for calls. Allow it when asked, or in app settings.</string>
 
     <!-- Media (milestone A1 test tone) -->

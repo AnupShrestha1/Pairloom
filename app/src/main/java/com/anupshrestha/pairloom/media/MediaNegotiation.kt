@@ -41,6 +41,9 @@ enum class MediaEnd {
     FAILED,
     /** Another app or a phone call took the audio (set by the caller of [MediaNegotiation.stop]). */
     AUDIO_TAKEN,
+
+    /** The link to the other phone was lost (set by the link owner). */
+    LINK_LOST,
 }
 
 /**

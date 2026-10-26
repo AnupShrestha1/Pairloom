@@ -111,14 +111,19 @@ fun ConnectionScreen(
         Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
         Text(text = stringResource(R.string.home_tagline), style = MaterialTheme.typography.bodyMedium)
 
-        if (link !is LinkState.Idle) StatusCard(link, ui.waitingFor)
+        val reconnecting = ui.reconnectingTo?.takeIf { link !is LinkState.Linked }
+        if (reconnecting != null) {
+            ReconnectingCard(reconnecting, actions)
+        } else if (link !is LinkState.Idle) {
+            StatusCard(link, ui.waitingFor)
+        }
 
         if (ui.cleaningUp) {
             Text(text = stringResource(R.string.cleaning_up), style = MaterialTheme.typography.bodySmall)
         }
 
         val canStart = !link.isActive && !ui.cleaningUp
-        if (!link.isActive) {
+        if (!link.isActive && reconnecting == null) {
             PairedPhonesHome(ui, canStart, actions)
             NewPhoneCard(hasPaired = ui.pairedDevices.isNotEmpty(), canStart = canStart, actions = actions)
         }
@@ -159,7 +164,7 @@ fun ConnectionScreen(
             }
         }
 
-        if (link.isActive) {
+        if (link.isActive && reconnecting == null) {
             val label = if (link is LinkState.Linked) R.string.btn_disconnect else R.string.btn_cancel
             OutlinedButton(onClick = actions.onDisconnect) { Text(stringResource(label)) }
         }
@@ -182,7 +187,23 @@ fun ConnectionScreen(
     }
 }
 
-/** Home: one card per paired phone, with "Connect" and "Be ready". */
+/** After a dropped link: the phones are reconnecting by themselves. */
+@Composable
+private fun ReconnectingCard(peer: String, actions: ConnectionActions) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = stringResource(R.string.notice_reconnecting, peer),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            Text(text = stringResource(R.string.reconnecting_body), style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = actions.onDisconnect) { Text(stringResource(R.string.btn_cancel)) }
+        }
+    }
+}
+
+/** Home: one card per paired phone, with "Connect". */
 @Composable
 private fun PairedPhonesHome(ui: LinkUiState, canStart: Boolean, actions: ConnectionActions) {
     if (ui.pairedDevices.isEmpty()) return
@@ -507,6 +528,7 @@ private fun endMessage(details: LinkDetails): String? {
         MediaEnd.DECLINED_BY_PEER -> stringResource(R.string.end_declined_by_peer, details.peerName, what)
         MediaEnd.FAILED -> stringResource(R.string.end_failed, whatTitle)
         MediaEnd.AUDIO_TAKEN -> stringResource(R.string.end_audio_taken, whatTitle)
+        MediaEnd.LINK_LOST -> stringResource(R.string.end_link_lost, whatTitle)
     }
 }
 
