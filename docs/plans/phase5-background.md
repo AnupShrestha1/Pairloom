@@ -80,9 +80,22 @@ itself. Same scope otherwise: two phones, Wi-Fi Direct, no internet.
   the background (2.6 % concealed, about 250 ms), then the Redmi logged "Audio focus lost (-1)":
   another app on the Redmi took the audio, and Pairloom correctly ended the call as "audio taken".
 
-### B2: in place, not verified
-- The incoming-call notification comes from the same mapping (`noticeFor`): high-importance
-  channel, call category, opens the app to answer.
+### Screen off (Redmi, Android 16, hosting)
+| Run | Concealed on the A03s during 60-80 s | Estimated one-way |
+|---|---|---|
+| Screen on (background) | 2.4-2.7 % | 230-270 ms |
+| Screen off, Wi-Fi locks only | 9-14 % | 250-460 ms |
+| Screen off, plus a partial CPU wake lock | 6-8.6 % | 270-450 ms |
+
+The wake lock removed the speaker underrun the Redmi had right after its screen went off. What
+remains is most likely Wi-Fi power saving: from Android 14 an app can only turn it off while it is
+in front with the screen on. Calls with the screen off work but sound rougher. This is a known
+limit; Opus at a lower packet rate is an option to try later.
+
+### B2: verified
+- An incoming call while Pairloom is not on screen shows a call-style notification
+  ("SM-A037F", Answer / Decline) on the high-importance channel. Answer opens Pairloom and accepts
+  in the foreground (verified on the Redmi). Decline sends the refusal.
 
 ### B3: done, verified on the phones
 - A link to a paired phone that drops (stopped responding, group ended, network error; not a

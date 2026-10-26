@@ -61,8 +61,20 @@ No ads.
 - Target age: 13 and over (not designed for children; avoids the Families policy requirements).
 - News app: no. COVID-19 app: no. Government app: no. Financial features: none.
 
+## Foreground service declaration (Phase 5)
+Pairloom runs a foreground service only while it is connected to the user's other phone:
+- **connectedDevice**: "Keeps the user-initiated Wi-Fi Direct link to the user's other phone
+  open, so a call or push-to-talk session can continue and incoming calls can be received while
+  the app is not on screen. The service shows an ongoing notification and stops as soon as the
+  link ends."
+- **microphone**: "Captures the microphone only during a call or push-to-talk session the user
+  started or accepted inside the app, so the call continues with the screen off or another app
+  open."
+- Video of the feature (Play asks for one): link two phones, start a call, press Home and show
+  the ongoing call notification with Hang up; then end the call from the notification.
+
 ## Permissions declarations
 - **Location** (`ACCESS_FINE_LOCATION`, only up to Android 12, `maxSdkVersion` 32): requested only
   in the foreground, because Android requires it for Wi-Fi Direct discovery on those versions. No
   background location, so no background-location declaration is needed.
-- **Foreground service**: none used.
+- **Foreground service**: see the declaration above (connected device and microphone types).

@@ -1464,6 +1464,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      * so both are held where available. Released when the media session ends.
      */
     private val wifiLocks = mutableListOf<WifiManager.WifiLock>()
+    private var cpuLock: android.os.PowerManager.WakeLock? = null
 
     @Suppress("DEPRECATION")
     private fun holdWifiLock(hold: Boolean) {
@@ -1471,9 +1472,21 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         if (!hold) {
             wifiLocks.forEach { runCatching { it.release() } }
             wifiLocks.clear()
-            log("Wi-Fi locks released")
+            cpuLock?.let { runCatching { it.release() } }
+            cpuLock = null
+            log("Wi-Fi and CPU locks released")
             return
         }
+        // With the screen off (seen on the Redmi) the audio threads fell behind: a speaker underrun
+        // right after the screen went off and ~10 % concealed on the other phone. A partial wake
+        // lock keeps the CPU running normally while media runs, as voice apps usually do.
+        runCatching {
+            val pm = app.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            cpuLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "pairloom:media").apply {
+                setReferenceCounted(false)
+                acquire(6 * 60 * 60 * 1000L) // a safety limit; released when the session ends
+            }
+        }.onFailure { log("Could not hold a CPU wake lock: ${it.message}") }
         val wifi = app.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
         val modes = buildList {
             if (Build.VERSION.SDK_INT >= 29) add(WifiManager.WIFI_MODE_FULL_LOW_LATENCY to "low-latency")

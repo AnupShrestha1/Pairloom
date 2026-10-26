@@ -18,6 +18,8 @@ Status: 0.4.0, a working prototype, not yet on Google Play. The release work is 
 - **One-tap reconnect.** Paired phones connect with Connect on both, with no system prompt: the
   phones agree on who hosts from their keys.
 - Shows why a call ended, and warns when nothing has been heard from the other phone for a second.
+- **Background calls and reconnect.** A foreground service keeps the link while connected. With
+  the screen off, calls work but sound rougher on some phones (Wi-Fi power saving).
 
 ## How to use it
 1. Install the app on both phones and open it on both.
@@ -28,7 +30,9 @@ Status: 0.4.0, a working prototype, not yet on Google Play. The release work is 
    connect without any prompt.
 4. Tap **Call** or **Push-to-talk**. The other phone accepts.
 
-Calls end when the app leaves the screen (version 1 is foreground only).
+Calls keep going in the background, with the screen off or another app open. A notification
+shows the call with Hang up, and incoming calls ring as a call notification with Answer and
+Decline. If the link drops, both phones reconnect by themselves for up to 90 seconds.
 
 ## Security and privacy
 - Every link is mutual TLS (1.3, or 1.2 with ECDHE-ECDSA AEAD) with a per-install Android Keystore

@@ -32,6 +32,12 @@ removes all of its data.
   permission to derive location.
 - **Wi-Fi state, network, wake lock and audio settings**: to run the Wi-Fi Direct link, keep it
   responsive during calls, and route audio to the earpiece, loudspeaker or headset.
+- **Notifications** (Android 13 and later): to show the ongoing call and incoming calls while
+  Pairloom is not on screen. Optional; calls work without it.
+- **Foreground service**: while connected to your other phone, Pairloom keeps running in the
+  background with a visible notification, so calls can continue with the screen off. It stops
+  when the connection ends. The microphone is used only during a call or push-to-talk session you
+  started or accepted.
 
 ## Children
 Pairloom is not directed at children under 13.
