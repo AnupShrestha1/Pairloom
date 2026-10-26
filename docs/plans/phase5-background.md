@@ -88,5 +88,5 @@ itself. Same scope otherwise: two phones, Wi-Fi Direct, no internet.
   access than the app has. Untested.
 
 ### Needs the user
-- Unlock the Redmi. From now on, any test that turns a screen off needs someone to unlock the
-  phone afterwards, or the phones set to a screen lock of "None" for the duration of the tests.
+- Unlock the Redmi. From now on, a test that turns a screen off needs someone there to unlock
+  the phone afterwards. The tests never unlock a phone themselves.
