@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 
@@ -61,6 +62,7 @@ class LinkService : Service() {
             ACTION_MUTE -> link.toggleMute()
             ACTION_END -> link.stopMedia()
             ACTION_DISCONNECT -> link.disconnect()
+            ACTION_DECLINE -> link.declineCall()
         }
         val notice = current
         if (notice == null) {
@@ -114,6 +116,10 @@ class LinkService : Service() {
         private const val ACTION_MUTE = "com.anupshrestha.pairloom.MUTE"
         private const val ACTION_END = "com.anupshrestha.pairloom.END"
         private const val ACTION_DISCONNECT = "com.anupshrestha.pairloom.DISCONNECT"
+        private const val ACTION_DECLINE = "com.anupshrestha.pairloom.DECLINE"
+
+        /** Opens the app and accepts the waiting call (the microphone is then used from the foreground). */
+        const val ACTION_ANSWER = "com.anupshrestha.pairloom.ANSWER"
 
         @Volatile private var instance: LinkService? = null
         @Volatile private var current: LinkNotice? = null
@@ -180,6 +186,9 @@ class LinkService : Service() {
                 .setCategory(if (incoming || notice.usesMicrophone) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_SERVICE)
                 .setPriority(if (incoming) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_LOW)
                 .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            // Calls use Android's call style: a hang-up button (and answer / decline for an incoming
+            // call) that stays visible even when the shade shows the notification collapsed.
+            val person = Person.Builder().setName(notice.peer).setImportant(true).build()
             when (notice) {
                 is LinkNotice.Linked -> b.setContentTitle(context.getString(R.string.notice_linked, notice.peer))
                     .setContentText(context.getString(R.string.notice_linked_text))
@@ -187,14 +196,22 @@ class LinkService : Service() {
                 is LinkNotice.InCall -> b.setContentTitle(context.getString(R.string.call_active, notice.peer))
                     .setContentText(context.getString(if (notice.muted) R.string.notice_muted else R.string.notice_call_text))
                     .setUsesChronometer(true)
+                    .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, action(context, ACTION_END, 2)))
                     .addAction(0, context.getString(if (notice.muted) R.string.btn_unmute else R.string.btn_mute), action(context, ACTION_MUTE, 1))
-                    .addAction(0, context.getString(R.string.btn_end_call), action(context, ACTION_END, 2))
                 is LinkNotice.PushToTalk -> b.setContentTitle(context.getString(R.string.ptt_active, notice.peer))
                     .setContentText(context.getString(R.string.notice_ptt_text))
-                    .addAction(0, context.getString(R.string.btn_end_ptt), action(context, ACTION_END, 2))
-                is LinkNotice.Incoming -> b.setContentTitle(
-                    context.getString(if (notice.pushToTalk) R.string.ptt_incoming else R.string.call_incoming, notice.peer),
-                ).setContentText(context.getString(R.string.notice_incoming_text))
+                    .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, action(context, ACTION_END, 2)))
+                is LinkNotice.Incoming -> {
+                    val answer = PendingIntent.getActivity(
+                        context, 5,
+                        Intent(context, MainActivity::class.java).setAction(ACTION_ANSWER)
+                            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                    b.setContentTitle(context.getString(if (notice.pushToTalk) R.string.ptt_incoming else R.string.call_incoming, notice.peer))
+                        .setContentText(context.getString(R.string.notice_incoming_text))
+                        .setStyle(NotificationCompat.CallStyle.forIncomingCall(person, action(context, ACTION_DECLINE, 4), answer))
+                }
                 is LinkNotice.Reconnecting -> b.setContentTitle(context.getString(R.string.notice_reconnecting, notice.peer))
                     .setContentText(context.getString(R.string.notice_reconnecting_text))
                     .addAction(0, context.getString(R.string.btn_cancel), action(context, ACTION_DISCONNECT, 3))

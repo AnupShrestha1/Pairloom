@@ -118,7 +118,7 @@
     <string name="notice_call_text">Call in progress</string>
     <string name="notice_muted">Microphone muted</string>
     <string name="notice_ptt_text">Open Pairloom to talk.</string>
-    <string name="notice_incoming_text">Tap to open Pairloom and answer.</string>
+    <string name="notice_incoming_text">Answer opens Pairloom.</string>
     <string name="notice_reconnecting">Reconnecting to %1$s…</string>
     <string name="notice_reconnecting_text">The link dropped. Keep the phones close.</string>
     <string name="home_paired_title">Your phones</string>

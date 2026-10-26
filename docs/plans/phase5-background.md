@@ -71,19 +71,28 @@ itself. Same scope otherwise: two phones, Wi-Fi Direct, no internet.
 - **Problem: the link later ended** ("the other phone stopped responding") while the Redmi stayed
   in the background with its screen off. Not diagnosed yet. Candidates: MIUI's background
   restrictions, Doze, or Wi-Fi Direct power saving on the group owner.
-- **Not verified**: the notification's End call button. Turning the Redmi's screen off locked it,
-  and the test cannot unlock it.
+- **Notification buttons**: now Android's call style. The hang-up button is red, and an incoming
+  call has Answer / Decline. MIUI shows every notification collapsed in its shade, so the buttons
+  appear after expanding the card (or in the pop-up banner). Verified on the Redmi in the
+  background: Answer opened Pairloom and accepted (both phones "In call"), and Hang up ended the
+  call (the A03s showed "Call ended by 23117RA68G.").
+- The "link later ended" case was explained in a rerun with the screen on. The call ran 161 s in
+  the background (2.6 % concealed, about 250 ms), then the Redmi logged "Audio focus lost (-1)":
+  another app on the Redmi took the audio, and Pairloom correctly ended the call as "audio taken".
 
 ### B2: in place, not verified
 - The incoming-call notification comes from the same mapping (`noticeFor`): high-importance
   channel, call category, opens the app to answer.
 
-### B3: done, not verified on the phones
+### B3: done, verified on the phones
 - A link to a paired phone that drops (stopped responding, group ended, network error; not a
   user's Disconnect) restarts Connect by itself, with the same roles, for up to 90 s, on both
   phones. "Reconnecting to X" shows on screen and in the notification, which also keeps the
   service running, so no new background start is needed. A running call ends as "the link was
   lost". Cancel stops it.
+- Device check: Pairloom was killed on the A03s while linked. The Redmi showed "Reconnecting to
+  SM-A037F…" (screen and notification) about 10 s later and hosted again. After the A03s reopened
+  Pairloom and tapped Connect, they linked 10 s later and the Redmi logged "Reconnected".
 - On Android 12 and older, Wi-Fi Direct discovery from the background may need more location
   access than the app has. Untested.
 

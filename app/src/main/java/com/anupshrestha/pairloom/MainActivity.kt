@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
             onConnectPaired = { fp -> requestThen { viewModel.connectPaired(fp) } },
             onConnectAuto = { fp -> requestThen { viewModel.connectAuto(fp) } },
         )
+        handleAnswer(intent)
         setContent {
             PairloomTheme {
                 val ui by viewModel.ui.collectAsState()
@@ -89,6 +90,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleAnswer(intent)
+    }
+
+    /** "Answer" on the incoming-call notification opens the app and accepts here, in the foreground. */
+    private fun handleAnswer(intent: Intent?) {
+        if (intent?.action != LinkService.ACTION_ANSWER) return
+        intent.action = null
+        withMicrophone(viewModel::acceptCall)
     }
 
     override fun onStart() {
