@@ -107,3 +107,27 @@ interrupting phone call) carry over and are done in R5.
   their turn. Now each late frame, while the buffer is below its target, stretches playout by one
   concealed frame (`Playout.Stretch`). Rerun: late frames 174 -> 29, concealed 22 % -> 4.8 %, calls
   unchanged (2.3 %).
+
+## R6 drafts (2026-10-26)
+- `docs/play/privacy-policy.md`: what the app handles (voice, phone name, keys, paired list,
+  group credentials), that none of it reaches the developer, and the permissions explained. It
+  needs a contact address and a public URL before release.
+- `docs/play/play-console-answers.md`: store listing text, Data safety ("no data collected or
+  shared", with the fallback answer if Google counts device-to-device audio), app access
+  instructions for reviewers (two phones needed), content rating and target audience answers.
+- `docs/play/screenshots/`: home, linked, call and push-to-talk from the Redmi (1080x2400). These
+  are drafts. Retake with a clean status bar (Android's demo mode) and real device names for the
+  store.
+
+## Needs the user (to finish Phase 4)
+1. **Upload key**: create it and `keystore.properties` as in `docs/release.md`, then run
+   `bundleRelease` once online (lint vital).
+2. **Play Console**: a developer account, the app entry, the forms (drafts in
+   `docs/play/play-console-answers.md`), and an internal testing release.
+3. **Privacy policy**: a contact address and a public place to host it (for example GitHub Pages
+   from this repository).
+4. **By-hand checks on a phone**: TalkBack on, font size at maximum, the battery over 20-30
+   minutes unplugged, a wired or USB headset during a call, and a phone call arriving during a
+   Pairloom call.
+5. **Older Android** (8-11) phones, if available.
+6. **Feature graphic** (1024x500) for the listing.
