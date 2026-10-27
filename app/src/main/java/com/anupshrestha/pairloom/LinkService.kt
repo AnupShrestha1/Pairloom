@@ -15,24 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
-
-/** What the ongoing notification shows; null when there is no link. */
-sealed interface LinkNotice {
-    val peer: String
-
-    data class Linked(override val peer: String) : LinkNotice
-    data class InCall(override val peer: String, val muted: Boolean) : LinkNotice
-    data class PushToTalk(override val peer: String) : LinkNotice
-
-    /** The other phone calls (or asks for push-to-talk) and this phone's user has to accept. */
-    data class Incoming(override val peer: String, val pushToTalk: Boolean) : LinkNotice
-
-    /** The link dropped and the phones are trying to get it back. */
-    data class Reconnecting(override val peer: String) : LinkNotice
-
-    /** Whether the microphone is in use (the foreground service needs the microphone type then). */
-    val usesMicrophone: Boolean get() = this is InCall || this is PushToTalk
-}
+import com.anupshrestha.pairloom.session.LinkNotice
 
 /**
  * Keeps the process in the foreground while a link is up, so that a call or push-to-talk goes on

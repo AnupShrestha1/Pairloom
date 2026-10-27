@@ -13,6 +13,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import com.anupshrestha.pairloom.media.MediaKind
+import com.anupshrestha.pairloom.session.LinkNotice
+import com.anupshrestha.pairloom.session.linkNotice
+import com.anupshrestha.pairloom.session.hostsFor
+import com.anupshrestha.pairloom.session.LinkUiState
+import com.anupshrestha.pairloom.session.DisconnectReason
 import org.junit.Test
 
 class LinkStateTest {
@@ -135,5 +141,60 @@ class LinkStateTest {
         assertTrue(P2pPermissions.locationServicesRequired(32))
         assertFalse(P2pPermissions.locationServicesRequired(33))
         assertNotNull(P2pPermissions.required(30))
+    }
+
+    // --- background notification and Connect roles ----------------------------------------------
+
+    private fun linked(
+        incoming: MediaKind? = null,
+        active: MediaKind? = null,
+        muted: Boolean = false,
+        reconnectingTo: String? = null,
+    ) = LinkUiState(
+        link = LinkState.Linked(
+            LinkDetails(
+                isGroupOwner = true, ownerAddress = null, peerName = "SM-A037F", groupFormedMs = 0, socketMs = 0,
+                incomingCall = incoming != null, incomingKind = incoming,
+                mediaActive = active != null, mediaKind = active, muted = muted,
+            ),
+        ),
+        reconnectingTo = reconnectingTo,
+    )
+
+    @Test
+    fun theNotificationFollowsTheLink() {
+        assertNull(linkNotice(LinkUiState(), visible = true)) // no link: no service
+        assertEquals(LinkNotice.Linked("SM-A037F"), linkNotice(linked(), visible = true))
+        assertEquals(LinkNotice.InCall("SM-A037F", muted = true), linkNotice(linked(active = MediaKind.VOICE, muted = true), visible = false))
+        assertEquals(LinkNotice.PushToTalk("SM-A037F"), linkNotice(linked(active = MediaKind.PTT), visible = true))
+        // The test tone is not a call: just "connected".
+        assertEquals(LinkNotice.Linked("SM-A037F"), linkNotice(linked(active = MediaKind.TONE), visible = true))
+    }
+
+    @Test
+    fun anIncomingCallRingsOnlyWhilePairloomIsNotOnScreen() {
+        assertEquals(LinkNotice.Linked("SM-A037F"), linkNotice(linked(incoming = MediaKind.VOICE), visible = true))
+        assertEquals(LinkNotice.Incoming("SM-A037F", pushToTalk = false), linkNotice(linked(incoming = MediaKind.VOICE), visible = false))
+        assertEquals(LinkNotice.Incoming("SM-A037F", pushToTalk = true), linkNotice(linked(incoming = MediaKind.PTT), visible = false))
+    }
+
+    @Test
+    fun reconnectingKeepsTheNotificationUpBetweenAttempts() {
+        val dropped = LinkUiState(link = LinkState.Disconnected(DisconnectReason.LINK_TIMEOUT, null), reconnectingTo = "SM-A037F")
+        assertEquals(LinkNotice.Reconnecting("SM-A037F"), linkNotice(dropped, visible = true))
+        // Once linked again the link wins, even before the flag is cleared.
+        assertEquals(LinkNotice.Linked("SM-A037F"), linkNotice(linked(reconnectingTo = "SM-A037F"), visible = true))
+        assertTrue(LinkNotice.InCall("x", false).usesMicrophone)
+        assertTrue(LinkNotice.PushToTalk("x").usesMicrophone)
+        assertTrue(!LinkNotice.Reconnecting("x").usesMicrophone)
+    }
+
+    @Test
+    fun exactlyOnePhoneHosts() {
+        val redmi = "4e4f" + "0".repeat(60)
+        val a03s = "6E56" + "0".repeat(60)
+        assertTrue(hostsFor(redmi, a03s))
+        assertTrue(!hostsFor(a03s, redmi))
+        assertTrue("case does not matter", hostsFor(redmi.uppercase(), a03s.lowercase()))
     }
 }

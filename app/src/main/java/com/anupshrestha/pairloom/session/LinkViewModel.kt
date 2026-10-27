@@ -52,7 +52,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import com.anupshrestha.pairloom.LinkNotice
 import com.anupshrestha.pairloom.LinkService
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -151,7 +150,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // The foreground service and its notification follow the link (main thread).
         viewModelScope.launch {
-            combine(ui, appVisible) { state, visible -> noticeFor(state, visible) }
+            combine(ui, appVisible) { state, visible -> linkNotice(state, visible) }
                 .distinctUntilChanged()
                 .collect { LinkService.sync(app, it) }
         }
@@ -365,7 +364,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val device = withContext(Dispatchers.IO) { runCatching { sec.store.load() }.getOrNull() }
                 ?.firstOrNull { it.fingerprintHex == peerFingerprintHex } ?: return@launch
-            val host = sec.identity.fingerprintHex.lowercase() < peerFingerprintHex.lowercase()
+            val host = hostsFor(sec.identity.fingerprintHex, peerFingerprintHex)
             when {
                 host -> {
                     log("Connect: this phone hosts for ${device.name} (lower key)")
@@ -600,20 +599,6 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onAppShown() {
         appVisible.value = true
-    }
-
-    /** What the ongoing notification ([LinkService]) shows for this state, or null without a link. */
-    private fun noticeFor(state: LinkUiState, visible: Boolean): LinkNotice? {
-        val reconnecting = state.reconnectingTo
-        if (reconnecting != null && state.link !is LinkState.Linked) return LinkNotice.Reconnecting(reconnecting)
-        val l = state.link as? LinkState.Linked ?: return null
-        val d = l.details
-        return when {
-            d.incomingCall && !visible -> LinkNotice.Incoming(d.peerName, pushToTalk = d.incomingKind == MediaKind.PTT)
-            d.mediaActive && d.mediaKind == MediaKind.VOICE -> LinkNotice.InCall(d.peerName, d.muted)
-            d.mediaActive && d.mediaKind == MediaKind.PTT -> LinkNotice.PushToTalk(d.peerName)
-            else -> LinkNotice.Linked(d.peerName)
-        }
     }
 
     // Live call audio, so mute and route can change during the call. Set on the IO thread that
