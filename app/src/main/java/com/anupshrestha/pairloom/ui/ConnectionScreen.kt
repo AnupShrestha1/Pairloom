@@ -2,6 +2,16 @@ package com.anupshrestha.pairloom.ui
 
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -135,18 +145,45 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
         TopBar(onSettings = { showSettings = true })
         val reconnecting = ui.reconnectingTo?.takeIf { link !is LinkState.Linked }
         val device = ui.pairedDevices.firstOrNull { it.fingerprintHex == selected } ?: ui.pairedDevices.firstOrNull()
-        when {
-            reconnecting != null -> Reconnecting(reconnecting, actions)
-            link is LinkState.Linked -> Linked(link.details, ui.micDenied, actions)
-            link is LinkState.Pairing -> Pairing(link, actions)
-            link is LinkState.Discovering -> Discovering(link, ui.waitingFor, actions)
-            link is LinkState.Hosting || link is LinkState.Connecting || link is LinkState.OpeningSocket ->
-                Connecting(link, ui.waitingFor, actions)
-            pairingNew || device == null -> NewPhone(firstTime = device == null, ui = ui, actions = actions, onCancel = { pairingNew = false })
-            else -> Home(device, ui, actions, onSelect = { selected = it }, onPairNew = { pairingNew = true })
+        // One key per screen; a change of screen cross-fades instead of cutting. The fading-out
+        // screen only draws if the state still fits it, so it never shows half-switched data.
+        val screen = when {
+            reconnecting != null -> Screen.RECONNECTING
+            link is LinkState.Linked -> when {
+                link.details.incomingCall -> Screen.INCOMING
+                link.details.mediaActive && link.details.mediaKind == MediaKind.VOICE -> Screen.CALL
+                link.details.mediaActive && link.details.mediaKind == MediaKind.PTT -> Screen.PTT
+                else -> Screen.LINKED
+            }
+            link is LinkState.Pairing -> Screen.PAIRING
+            link is LinkState.Discovering && ui.waitingFor == null -> Screen.DISCOVERING
+            link is LinkState.Discovering || link is LinkState.Hosting || link is LinkState.Connecting || link is LinkState.OpeningSocket -> Screen.CONNECTING
+            pairingNew || device == null -> Screen.NEW_PHONE
+            else -> Screen.HOME
+        }
+        AnimatedContent(
+            targetState = screen,
+            transitionSpec = { fadeIn(tween(220, delayMillis = 60)) togetherWith fadeOut(tween(160)) },
+            modifier = Modifier.weight(1f),
+            label = "screen",
+        ) { shown ->
+            Column(Modifier.fillMaxSize()) {
+                when (shown) {
+                    Screen.RECONNECTING -> ui.reconnectingTo?.let { Reconnecting(it, actions) }
+                    Screen.INCOMING, Screen.CALL, Screen.PTT, Screen.LINKED ->
+                        (link as? LinkState.Linked)?.let { Linked(it.details, ui.micDenied, actions) }
+                    Screen.PAIRING -> (link as? LinkState.Pairing)?.let { Pairing(it, actions) }
+                    Screen.DISCOVERING -> (link as? LinkState.Discovering)?.let { Discovering(it, ui.waitingFor, actions) }
+                    Screen.CONNECTING -> if (link.isActive) Connecting(link, ui.waitingFor, actions)
+                    Screen.NEW_PHONE -> NewPhone(firstTime = device == null, ui = ui, actions = actions, onCancel = { pairingNew = false })
+                    Screen.HOME -> device?.let { Home(it, ui, actions, onSelect = { fp -> selected = fp }, onPairNew = { pairingNew = true }) }
+                }
+            }
         }
     }
 }
+
+private enum class Screen { RECONNECTING, INCOMING, CALL, PTT, LINKED, PAIRING, DISCOVERING, CONNECTING, NEW_PHONE, HOME }
 
 @Composable
 private fun TopBar(onSettings: () -> Unit) {
@@ -198,12 +235,16 @@ private fun ColumnScope.Stage(
         Text(title, style = MaterialTheme.typography.displaySmall, textAlign = TextAlign.Center)
         if (status != null) {
             Spacer(Modifier.height(6.dp))
+            val spoken = "$title, $status" // "Galaxy, is talking", not just "is talking"
             Text(
                 status,
                 style = MaterialTheme.typography.titleLarge,
                 color = statusColor,
                 textAlign = TextAlign.Center,
-                modifier = if (announce != null) Modifier.semantics { liveRegion = announce } else Modifier,
+                modifier = Modifier.semantics {
+                    contentDescription = spoken
+                    if (announce != null) liveRegion = announce
+                },
             )
         }
         Spacer(Modifier.height(20.dp))
@@ -363,9 +404,16 @@ private fun ColumnScope.NewPhone(firstTime: Boolean, ui: LinkUiState, actions: C
         if (!firstTime) SecondButton(stringResource(R.string.btn_cancel), onCancel)
         ui.ownName?.let { own ->
             var renaming by rememberSaveable { mutableStateOf(false) }
+            val called = stringResource(R.string.this_phone_is_called, own)
+            val rename = stringResource(R.string.btn_rename)
+            val accent = MaterialTheme.colorScheme.primary
             TextButton(onClick = { renaming = true }) {
                 Text(
-                    stringResource(R.string.this_phone_is_called, own),
+                    buildAnnotatedString {
+                        append(called)
+                        append(" ")
+                        withStyle(SpanStyle(color = accent)) { append(rename) }
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -705,9 +753,12 @@ private fun ColumnScope.PushToTalk(details: LinkDetails, actions: ConnectionActi
     val tapMode = tapChosen || touchExploration
     var talking by remember { mutableStateOf(false) }
     val onTalk by rememberUpdatedState(actions.onTalk)
+    val haptics = LocalHapticFeedback.current
     fun setTalking(on: Boolean) {
         if (talking == on) return
         talking = on
+        // A firm tick when the microphone goes live, a light one when it stops: no need to look.
+        haptics.performHapticFeedback(if (on) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove)
         onTalk(on)
     }
     // Never leave the microphone sending if the panel goes away or the mode changes mid-press.

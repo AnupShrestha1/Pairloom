@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Pairloom teal, also the fallback primary colour where dynamic colour is not available. -->
-    <color name="ic_launcher_background">#00696B</color>
+    <!-- Black, behind the neon rings of the launcher icon. -->
+    <color name="ic_launcher_background">#000000</color>
 </resources>

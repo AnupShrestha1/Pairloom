@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon: the app's two rings as lit neon tubes on black (the themed icon keeps the plain
+     white rings of ic_launcher_foreground). Vectors cannot blur, so the glow is wide, faint strokes
+     under each tube, and a light line runs along each tube's core. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Glow -->
+    <path android:fillColor="#00000000" android:strokeColor="#402BB3AC" android:strokeWidth="15"
+        android:pathData="M42,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <path android:fillColor="#00000000" android:strokeColor="#40F2A93B" android:strokeWidth="15"
+        android:pathData="M66,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <path android:fillColor="#00000000" android:strokeColor="#662BB3AC" android:strokeWidth="10"
+        android:pathData="M42,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <path android:fillColor="#00000000" android:strokeColor="#66F2A93B" android:strokeWidth="10"
+        android:pathData="M66,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <!-- Tubes -->
+    <path android:fillColor="#00000000" android:strokeColor="#2BB3AC" android:strokeWidth="5.5"
+        android:pathData="M42,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <path android:fillColor="#00000000" android:strokeColor="#F2A93B" android:strokeWidth="5.5"
+        android:pathData="M66,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <!-- Bright cores -->
+    <path android:fillColor="#00000000" android:strokeColor="#E6B4E8E5" android:strokeWidth="1.6"
+        android:pathData="M42,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <path android:fillColor="#00000000" android:strokeColor="#E6FADDB2" android:strokeWidth="1.6"
+        android:pathData="M66,54m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <!-- Woven: at the top crossing this phone's teal thread passes over the other's. -->
+    <path android:fillColor="#00000000" android:strokeColor="#2BB3AC" android:strokeWidth="5.5"
+        android:pathData="M51.18,40.89 A16,16 0 0,1 56.26,46.74" />
+    <path android:fillColor="#00000000" android:strokeColor="#E6B4E8E5" android:strokeWidth="1.6"
+        android:pathData="M51.18,40.89 A16,16 0 0,1 56.26,46.74" />
+</vector>

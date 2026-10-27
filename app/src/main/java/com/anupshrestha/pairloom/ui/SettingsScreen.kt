@@ -76,10 +76,9 @@ fun SettingsScreen(
             Section(stringResource(R.string.this_phone_title)) { ThisPhone(ui, actions) }
             Section(stringResource(R.string.your_phones_title)) {
                 YourPhones(ui, actions)
-                Spacer(Modifier.heightIn(min = 4.dp))
-                OutlinedButton(
+                // While linked the button would only show disabled; the line above explains why.
+                if (!link.isActive && !ui.cleaningUp) OutlinedButton(
                     onClick = onPairNew,
-                    enabled = !link.isActive && !ui.cleaningUp,
                     shape = RoundedCornerShape(16.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),

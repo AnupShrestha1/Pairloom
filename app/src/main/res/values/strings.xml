@@ -225,7 +225,7 @@
     <string name="btn_end_ptt_short">End</string>
     <string name="new_status">You only do this once</string>
     <string name="this_phone_title">This phone</string>
-    <string name="this_phone_is_called">This phone is called %1$s. Rename</string>
+    <string name="this_phone_is_called">This phone is called %1$s.</string>
     <string name="rename_this_phone">Name this phone</string>
     <string name="rename_paired">Rename %1$s</string>
     <string name="rename_paired_hint">Only on this phone. Leave it empty to use the name the other phone sends.</string>
@@ -244,6 +244,6 @@
     <string name="btn_hide_troubleshooting">Hide troubleshooting information</string>
     <string name="forget_title">Forget %1$s?</string>
     <string name="forget_body">To connect to it again, you will have to pair the phones again and compare the code.</string>
-    <string name="forget_while_linked">Disconnect first to forget a phone.</string>
+    <string name="forget_while_linked">Disconnect first to forget a phone or pair a new one.</string>
     <string name="other_phones">Your other phones</string>
 </resources>

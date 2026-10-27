@@ -137,3 +137,17 @@ neon look and a pure black background. Changes:
   apart, stronger when linked, strongest while that phone is talking.
 - **Pure black dark theme** (#000000; surfaces #111316 / #1B1E23): AMOLED pixels switch off, and
   the neon reads better.
+
+## Refinements (2026-10-27)
+- **Crossfade between screens**: each state is keyed, so connecting → linked → call fades instead
+  of cutting. A screen that is fading out draws only if the state still fits it, so it never shows
+  half-switched data.
+- **Push-to-talk haptics**: a firm tick when the microphone goes live and a light one when it stops,
+  so nobody has to look.
+- **TalkBack**: status lines are read with the name ("Galaxy, is talking").
+- **Settings while linked**: no disabled "Pair a new phone" button (it was nearly invisible on
+  black). One line says: "Disconnect first to forget a phone or pair a new one."
+- "This phone is called Redmi. Rename": "Rename" is in the accent colour, so it reads as tappable.
+- **Launcher icon**: the neon rings on black, woven at the top crossing. The themed icon (Android
+  13+) keeps the plain white rings.
+- Checked on both phones: a full tour through every state with no crash.
