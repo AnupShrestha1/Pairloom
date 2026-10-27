@@ -59,6 +59,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import com.anupshrestha.pairloom.session.GroupDetails
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -358,6 +360,11 @@ private fun ColumnScope.Home(
             onClick = { actions.onConnectAuto(device.fingerprintHex) },
             enabled = canStart,
         )
+        // Connect picks who hosts from the two keys. When the other phone already hosts a group
+        // with other phones, this phone must join it, whatever the keys say.
+        if (device.canJoinDirectly && android.os.Build.VERSION.SDK_INT >= 29) {
+            QuietButton(stringResource(R.string.btn_join_group_of, device.name), { actions.onConnectPaired(device.fingerprintHex) }, enabled = canStart)
+        }
         SecondButton(stringResource(R.string.btn_pair_new), onPairNew, enabled = canStart)
     }
 }
@@ -645,7 +652,11 @@ private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions
             mode = RingsMode.JOINED,
             title = details.peerName,
             status = endMessage(details) ?: stringResource(R.string.status_connected),
-            content = { if (micDenied) Body(stringResource(R.string.call_mic_denied), MaterialTheme.colorScheme.error) },
+            content = {
+                if (micDenied) Body(stringResource(R.string.call_mic_denied), MaterialTheme.colorScheme.error)
+                // More than two phones on the link: say who else is here.
+                details.group?.takeIf { it.members.size > 2 }?.let { GroupMembers(it) }
+            },
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 BigButton(stringResource(R.string.btn_call), actions.onCall, Modifier.weight(1f), glyph = Glyph.CALL)
@@ -805,7 +816,10 @@ private fun ColumnScope.PushToTalk(details: LinkDetails, actions: ConnectionActi
         statusColor = if (peerTalking) threads.peerText else MaterialTheme.colorScheme.onSurfaceVariant,
         peerLevel = if (peerTalking) maxOf(s?.peerLevel ?: 0f, 0.35f) else 0f,
         selfTalking = talking && !unheard,
-        content = { routeName(details.audioRoute)?.let { Body(it) } },
+        content = {
+            routeName(details.audioRoute)?.let { Body(it) }
+            group?.let { GroupMembers(it) }
+        },
     ) {
         val idleText = stringResource(if (tapMode) R.string.ptt_tap else R.string.ptt_hold)
         val activeText = stringResource(if (tapMode) R.string.ptt_tap_stop else R.string.ptt_release)
@@ -876,6 +890,37 @@ private fun ColumnScope.PushToTalk(details: LinkDetails, actions: ConnectionActi
             BigButton(stringResource(R.string.btn_end_ptt_short), actions.onStopMedia, Modifier.weight(1f), danger = true, glyph = Glyph.HANG_UP)
         }
     }
+}
+
+/**
+ * Who is on the link, in one line: whoever has the floor in the other phone's colour, phones not
+ * in the group talk dimmed, and this phone marked.
+ */
+@Composable
+private fun GroupMembers(group: GroupDetails) {
+    val threads = LocalThreads.current
+    val normal = MaterialTheme.colorScheme.onSurface
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    val you = stringResource(R.string.group_you)
+    val notIn = stringResource(R.string.group_not_in_talk)
+    val text = buildAnnotatedString {
+        group.members.forEachIndexed { i, m ->
+            if (i > 0) withStyle(SpanStyle(color = dim)) { append("  ·  ") }
+            val talking = m.hasFloor
+            val color = when {
+                talking -> threads.peerText
+                m.inTalk -> normal
+                else -> dim
+            }
+            withStyle(SpanStyle(color = color, fontWeight = if (talking) FontWeight.SemiBold else null)) {
+                append(m.name)
+                val notes = listOfNotNull(you.takeIf { m.isThisPhone }, notIn.takeIf { !m.inTalk })
+                if (notes.isNotEmpty()) append(notes.joinToString(", ", " (", ")"))
+            }
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    Text(text, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
 }
 
 /** Whether TalkBack (or another touch-exploration service) is on, kept up to date. */

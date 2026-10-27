@@ -550,8 +550,11 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     /** Debug builds (G3): a simulated member on the hosting phone, see [VirtualPhone]. */
     @Volatile private var virtualPhone: Closeable? = null
 
-    /** Hosting phone: control links to the phones that joined after the first, by member id. */
-    private val extraMembers = java.util.concurrent.ConcurrentHashMap<Int, ControlChannel>()
+    /** Hosting phone: a phone linked after the first one. */
+    private class ExtraMember(val channel: ControlChannel, val name: String, val fingerprintHex: String, val address: InetAddress)
+
+    /** Hosting phone: the phones that joined after the first, by member id. */
+    private val extraMembers = java.util.concurrent.ConcurrentHashMap<Int, ExtraMember>()
 
     /** Joins the group talk. The activity has already made sure RECORD_AUDIO is granted. */
     fun startGroupTalk() {
@@ -777,7 +780,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val me = g.ownId
         val holder = g.floorHolder
         return GroupDetails(
-            members = roster.map { GroupMemberUi(it.name, it.inTalk, it.id == me) },
+            members = roster.map { GroupMemberUi(it.name, it.inTalk, it.id == me, holder != null && it.id == holder) },
             inTalk = g.isBusy,
             joining = g.isJoining,
             floorHolder = holder?.let { h -> roster.firstOrNull { it.id == h }?.name },
@@ -1346,17 +1349,28 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 ch.close(sendBye = true)
                 continue
             }
-            extraMembers[id] = ch
+            extraMembers[id] = ExtraMember(ch, name, established.peer.fingerprintHex, established.remoteAddress)
             log("$name joined the link as member $id")
             launch {
                 val exit = try {
-                    ch.run(onStats = {}, onMedia = { m -> if (gen == generation) runCatching { groupHost?.onMessage(id, m) } })
+                    ch.run(
+                        // Once promoted to the main link ([promoteMember]) it feeds the screen and 1:1 calls too.
+                        onStats = { st -> if (primaryMemberId == id) onStats(st, gen) },
+                        onMedia = { m ->
+                            if (gen == generation) {
+                                if (primaryMemberId == id) onMediaMessage(m, gen) else runCatching { groupHost?.onMessage(id, m) }
+                            }
+                        },
+                    )
                 } finally {
                     extraMembers.remove(id)
-                    groupHost?.unlink(id)
                     ch.close(sendBye = false)
                 }
                 log("$name left the link: $exit")
+                withContext(Dispatchers.Main) {
+                    if (gen != generation) return@withContext
+                    if (primaryMemberId == id) onChannelEnded(exit) else groupHost?.unlink(id)
+                }
             }
         }
     }
@@ -1525,24 +1539,63 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val local = LinkEndpoint.toIpv4(established.localAddress)
         val remote = LinkEndpoint.toIpv4(established.remoteAddress)
         if (local != null && remote != null) {
-            media = MediaNegotiation(
-                isServer = isGroupOwner,
-                localAddress = local,
-                peerAddress = remote,
-                send = { ch.sendMessage(it) },
-                newSession = { kind, codec, s, p, out, input -> newMediaSession(kind, codec, s, p, out, input) },
-                log = { log(it) },
-                onEnded = { kind, reason ->
-                    log("Media ended: $kind, $reason")
-                    if (kind != MediaKind.TONE) lastEnd = kind to reason
-                },
-                localCodecs = { if (opusEnabled && opusAvailable) AudioCodec.OPUS.bit else 0 },
-            )
+            media = newNegotiation(isGroupOwner, local, remote, ch)
             setUpGroup(isGroupOwner, local, remote, ch, established.peer.name)
             startMediaPoll(generation)
         } else {
             log("Media unavailable: the link addresses are not IPv4")
         }
+    }
+
+    /** 1:1 calls with the phone on the main link. */
+    private fun newNegotiation(isServer: Boolean, local: InetAddress, remote: InetAddress, ch: ControlChannel) = MediaNegotiation(
+        isServer = isServer,
+        localAddress = local,
+        peerAddress = remote,
+        send = { ch.sendMessage(it) },
+        newSession = { kind, codec, s, p, out, input -> newMediaSession(kind, codec, s, p, out, input) },
+        log = { log(it) },
+        onEnded = { kind, reason ->
+            log("Media ended: $kind, $reason")
+            if (kind != MediaKind.TONE) lastEnd = kind to reason
+        },
+        localCodecs = { if (opusEnabled && opusAvailable) AudioCodec.OPUS.bit else 0 },
+    )
+
+    /**
+     * Hosting phone: the phone on the main link left, but others are still linked. The next one
+     * becomes the main link (its name at the top, 1:1 calls, link statistics), and the group talk
+     * goes on. Returns false when nobody else is linked.
+     */
+    private fun promoteMember(exit: ControlChannel.Exit): Boolean {
+        val host = groupHost ?: return false
+        val local = groupLocal ?: return false
+        val (id, next) = extraMembers.entries.firstOrNull()?.toPair() ?: return false
+        val linked = _ui.value.link as? LinkState.Linked ?: return false
+        extraMembers.remove(id)
+        primaryMemberId?.let { host.unlink(it) }
+        primaryMemberId = id
+        channel = next.channel
+        linkedPeerFingerprint = next.fingerprintHex
+        val old = media
+        old?.kind?.takeIf { old.session != null && it != MediaKind.TONE }?.let { lastEnd = it to MediaEnd.ENDED_BY_PEER }
+        media = newNegotiation(true, local, next.address, next.channel)
+        if (old != null) thread(isDaemon = true, name = "pairloom-close") { runCatching { old.close() } }
+        val name = names.nickname(next.fingerprintHex) ?: next.name
+        log("${linked.details.peerName} left ($exit); staying linked with $name and the group")
+        linkedAtMs = SystemClock.elapsedRealtime()
+        setLink(
+            LinkState.Linked(
+                linked.details.copy(
+                    peerName = name,
+                    peerKey = Fingerprints.short(next.fingerprintHex),
+                    newlyPaired = false,
+                    stats = PingStats(),
+                    uptimeMs = 0,
+                ),
+            ),
+        )
+        return true
     }
 
     private fun onStats(stats: PingStats, gen: Int) {
@@ -1559,6 +1612,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun onChannelEnded(exit: ControlChannel.Exit) {
         log("Control link ended: $exit")
+        if (exit != ControlChannel.Exit.LocalClose && promoteMember(exit)) return
         val state = when (exit) {
             ControlChannel.Exit.LocalClose -> LinkState.Disconnected(DisconnectReason.LOCAL, null)
             ControlChannel.Exit.PeerClosed -> LinkState.Disconnected(DisconnectReason.PEER_CLOSED, null)
@@ -1629,7 +1683,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val virtual = virtualPhone
         virtualPhone = null
         if (_ui.value.virtualPhoneOn) _ui.update { it.copy(virtualPhoneOn = false) }
-        val extras = extraMembers.values.toList()
+        val extras = extraMembers.values.map { it.channel }
         extraMembers.clear()
 
         val ch = channel

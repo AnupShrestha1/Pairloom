@@ -155,7 +155,7 @@ data class GroupDetails(
     val floorIsMine: Boolean,
 )
 
-data class GroupMemberUi(val name: String, val inTalk: Boolean, val isThisPhone: Boolean)
+data class GroupMemberUi(val name: String, val inTalk: Boolean, val isThisPhone: Boolean, val hasFloor: Boolean = false)
 
 /** A paired phone as shown in the list. */
 data class PairedDeviceUi(

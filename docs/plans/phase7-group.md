@@ -165,3 +165,20 @@ Still open:
 - Tests: 129, including the decoder labelling.
 - Not confirmed: the A03s showing "Virtual phone is talking". Its screen reads never caught it,
   probably because uiautomator waits for the glowing rings to stop moving; the Redmi showed it.
+
+## G4 results (2026-10-27)
+- **Who is on the link**: one line under the status, for example
+  "Redmi (you) · Galaxy · Virtual phone". Whoever has the floor is shown in the other phone's
+  colour; phones not in the talk are dimmed and marked "not in the talk". It shows on the group
+  talk screen, and on Linked once more than two phones are on the link.
+- **Join a group whatever the keys say**: Home shows "Join Redmi's group instead" under Connect
+  (Android 10+, for a phone whose group is known). It always joins and never hosts. Checked: the
+  A03s joined the Redmi this way in 1.3 s.
+- **The group stays up when the first phone leaves** (hosting phone): if other phones are still
+  linked, the next one is promoted to the main link (its name at the top, 1:1 calls, link
+  statistics) and the group talk goes on. The link ends only when the last phone leaves or this
+  phone's user disconnects. Not checked on the phones: it needs a second real phone linked to the
+  host (the virtual phone joins in-process, not over a control link).
+- Checked on both phones with the virtual phone: the member lists on both screens, "Galaxy is
+  talking" on the Redmi while the A03s talked, the virtual phone holding back while the A03s had
+  the floor, and Disconnect seen as "disconnected". No crash.

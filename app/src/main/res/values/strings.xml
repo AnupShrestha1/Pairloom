@@ -262,4 +262,7 @@
     <string name="group_press_again">Not heard. Let go and press again to talk.</string>
     <string name="virtual_phone_title">Virtual phone (debug build)</string>
     <string name="virtual_phone_body">A simulated third phone joins the group talk on this phone and beeps for 2 s every 8 s.</string>
+    <string name="btn_join_group_of">Join %1$s\'s group instead</string>
+    <string name="group_you">you</string>
+    <string name="group_not_in_talk">not in the talk</string>
 </resources>
