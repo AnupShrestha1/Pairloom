@@ -151,6 +151,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingPairing: CompletableDeferred<Boolean>? = null
 
     init {
+        // The saved look at once (a small preferences read), so a chosen theme does not flash.
+        _ui.update { it.copy(appearance = names.appearance, ownName = names.ownName) }
         // The foreground service and its notification follow the link (main thread).
         viewModelScope.launch {
             combine(ui, appVisible) { state, visible -> linkNotice(state, visible) }
@@ -173,7 +175,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             }
             loaded.onSuccess {
                 security = it
-                _ui.update { s -> s.copy(ownKey = Fingerprints.short(it.identity.fingerprintHex), ownName = names.ownName) }
+                _ui.update { s -> s.copy(ownKey = Fingerprints.short(it.identity.fingerprintHex), ownName = names.ownName, appearance = names.appearance) }
                 log("Identity ready: key ${Fingerprints.short(it.identity.fingerprintHex)}")
                 refreshPaired()
             }.onFailure {
@@ -748,6 +750,11 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         pendingPairing = null
         log(if (codesMatch) "You confirmed the codes match" else "You said the codes do not match")
         pending.complete(codesMatch)
+    }
+
+    fun setAppearance(appearance: Appearance) {
+        names.appearance = appearance
+        _ui.update { it.copy(appearance = appearance) }
     }
 
     /** This phone's name, as the other phone will see it. */

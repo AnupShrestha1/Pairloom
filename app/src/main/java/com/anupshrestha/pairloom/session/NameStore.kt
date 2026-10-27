@@ -3,6 +3,9 @@ package com.anupshrestha.pairloom.session
 import android.content.Context
 import android.os.Build
 
+/** The app's light or dark look. */
+enum class Appearance { SYSTEM, DARK, LIGHT }
+
 /**
  * Names people choose: this phone's name (sent to the other phone when linking, instead of the
  * model code) and local nicknames for paired phones ("Asha's phone"), which win over whatever name
@@ -18,6 +21,13 @@ class NameStore(context: Context) {
             prefs.edit().putString(KEY_OWN, clean(value)).apply()
         }
 
+    /** Light or dark: follow the phone (default), or always one of them. */
+    var appearance: Appearance
+        get() = runCatching { Appearance.valueOf(prefs.getString(KEY_APPEARANCE, null) ?: "") }.getOrDefault(Appearance.SYSTEM)
+        set(value) {
+            prefs.edit().putString(KEY_APPEARANCE, value.name).apply()
+        }
+
     fun nickname(fingerprintHex: String): String? = prefs.getString(KEY_NICK + fingerprintHex.lowercase(), null)?.takeIf { it.isNotBlank() }
 
     /** Sets a nickname, or removes it when [name] is blank. */
@@ -30,6 +40,7 @@ class NameStore(context: Context) {
     companion object {
         private const val KEY_OWN = "own"
         private const val KEY_NICK = "nick:"
+        private const val KEY_APPEARANCE = "appearance"
 
         /** Names are one line, trimmed and kept short (the link protocol sends at most 64 bytes). */
         const val MAX_CHARS = 32

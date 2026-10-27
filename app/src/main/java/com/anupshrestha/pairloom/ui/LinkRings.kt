@@ -122,21 +122,24 @@ fun LinkRings(
             RingsMode.APART -> 0.35f
             RingsMode.SEEKING -> 0.5f
             RingsMode.JOINED -> 0.75f
-        }
+        } * (if (threads.neon) 1f else 0.45f)
         neonGlow(left, r, stroke, threads.self, (base + 0.5f * selfPulse).coerceAtMost(1.2f), null)
         neonGlow(right, r, stroke, threads.peer, (base + 0.5f * peerPulse).coerceAtMost(1.2f), if (mode == RingsMode.JOINED) null else dashFor(stroke, motion, dash))
         drawCircle(threads.self, r, left, style = Stroke(stroke))
         drawCircle(threads.peer, r, right, style = peerStyle)
-        // The bright core of a lit tube.
-        drawCircle(lighter(threads.self), r, left, style = Stroke(stroke * 0.28f))
-        if (mode == RingsMode.JOINED) drawCircle(lighter(threads.peer), r, right, style = Stroke(stroke * 0.28f))
+        // The bright core of a lit tube (on black only).
+        if (threads.neon) {
+            drawCircle(lighter(threads.self), r, left, style = Stroke(stroke * 0.28f))
+            if (mode == RingsMode.JOINED) drawCircle(lighter(threads.peer), r, right, style = Stroke(stroke * 0.28f))
+        }
 
         // Woven: where the rings cross at the top, this phone's thread passes over the other's.
         if (spread < 2f) {
             val dx = half
             val h = sqrt((r * r - dx * dx).coerceAtLeast(0f))
             val angle = Math.toDegrees(atan2(-h, dx).toDouble()).toFloat()
-            for ((color, width) in listOf(threads.self to stroke, lighter(threads.self) to stroke * 0.28f)) {
+            val weave = if (threads.neon) listOf(threads.self to stroke, lighter(threads.self) to stroke * 0.28f) else listOf(threads.self to stroke)
+            for ((color, width) in weave) {
                 drawArc(
                     color = color,
                     startAngle = angle - 14f,

@@ -191,6 +191,7 @@ data class LinkUiState(
     val ownKey: String? = null,
     /** This phone's name as the other phone sees it. */
     val ownName: String? = null,
+    val appearance: Appearance = Appearance.SYSTEM,
     val pairedDevices: List<PairedDeviceUi> = emptyList(),
     /** The user refused the microphone permission; calls cannot start. */
     val micDenied: Boolean = false,

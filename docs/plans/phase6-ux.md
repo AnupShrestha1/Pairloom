@@ -151,3 +151,15 @@ neon look and a pure black background. Changes:
 - **Launcher icon**: the neon rings on black, woven at the top crossing. The themed icon (Android
   13+) keeps the plain white rings.
 - Checked on both phones: a full tour through every state with no crash.
+
+## Appearance, light mode and first-time pairing (2026-10-27)
+- **Appearance** in Settings: Follow the phone (default) / Dark (pure black) / Light. It loads at
+  start, so a chosen look does not flash. Status and navigation bar icons follow the app's look.
+- **Light mode**, checked on both phones (via the new setting): text contrast holds, and "is
+  talking" uses the deeper saffron. The neon core line read as a pale double line on a light
+  background, so light mode draws plain coloured threads with a softer glow. Neon is for black only.
+- **First-time pairing**, walked on both phones after Forget: first-run screen, Host, the join
+  list, the system prompt, the code check ("587 269"), linked. No crash. Fixed from it:
+  - the hosting title wrapped to two lines and repeated "Waiting…", so it is now "Hosting" with
+    "Waiting for the other phone…";
+  - "Rescan" is now "Search again", matching the help text.

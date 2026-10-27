@@ -115,6 +115,7 @@ class ConnectionActions(
     val onRenameThisPhone: (String) -> Unit,
     /** A local nickname for a paired phone (key fingerprint, name; blank removes it). */
     val onRenamePaired: (String, String) -> Unit,
+    val onAppearance: (com.anupshrestha.pairloom.session.Appearance) -> Unit,
 )
 
 /**
@@ -511,7 +512,7 @@ private fun problemOf(link: LinkState): Pair<String, String?>? = when (link) {
 private fun ColumnScope.Connecting(link: LinkState, waitingFor: String?, actions: ConnectionActions) {
     val title = waitingFor ?: when (link) {
         is LinkState.Connecting -> link.peerName
-        else -> stringResource(R.string.status_hosting_ready)
+        else -> stringResource(R.string.hosting_title)
     }
     val body = when {
         waitingFor != null -> stringResource(R.string.waiting_for_body, waitingFor)

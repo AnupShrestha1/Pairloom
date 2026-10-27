@@ -55,7 +55,15 @@ private val LightColors = lightColorScheme(
 )
 
 /** The two thread colours and the hang-up red, which Material's scheme has no names for. */
-data class ThreadColors(val self: Color, val peer: Color, val peerText: Color, val hangUp: Color, val onHangUp: Color)
+data class ThreadColors(
+    val self: Color,
+    val peer: Color,
+    val peerText: Color,
+    val hangUp: Color,
+    val onHangUp: Color,
+    /** Neon (bright core and stronger glow) only reads on black; light mode draws plain threads. */
+    val neon: Boolean = true,
+)
 
 val LocalThreads = staticCompositionLocalOf {
     ThreadColors(self = Teal, peer = Saffron, peerText = Saffron, hangUp = SignalRed, onHangUp = Color.White)
@@ -69,7 +77,7 @@ fun PairloomTheme(
     val threads = if (darkTheme) {
         ThreadColors(self = TealBright, peer = Saffron, peerText = Saffron, hangUp = SignalRed, onHangUp = Color.White)
     } else {
-        ThreadColors(self = Teal, peer = Saffron, peerText = SaffronDeep, hangUp = SignalRed, onHangUp = Color.White)
+        ThreadColors(self = Teal, peer = Saffron, peerText = SaffronDeep, hangUp = SignalRed, onHangUp = Color.White, neon = false)
     }
     androidx.compose.runtime.CompositionLocalProvider(LocalThreads provides threads) {
         MaterialTheme(

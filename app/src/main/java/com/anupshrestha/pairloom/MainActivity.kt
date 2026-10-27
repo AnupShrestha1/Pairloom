@@ -10,6 +10,11 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import android.graphics.Color as AndroidColor
+import com.anupshrestha.pairloom.session.Appearance
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -82,11 +87,24 @@ class MainActivity : ComponentActivity() {
             onConnectAuto = { fp -> requestThen { viewModel.connectAuto(fp) } },
             onRenameThisPhone = viewModel::renameThisPhone,
             onRenamePaired = viewModel::renamePaired,
+            onAppearance = viewModel::setAppearance,
         )
         handleAnswer(intent)
         setContent {
-            PairloomTheme {
-                val ui by viewModel.ui.collectAsState()
+            val ui by viewModel.ui.collectAsState()
+            val dark = when (ui.appearance) {
+                Appearance.DARK -> true
+                Appearance.LIGHT -> false
+                Appearance.SYSTEM -> isSystemInDarkTheme()
+            }
+            // Status and navigation bar icons follow the app's look, not only the phone's.
+            DisposableEffect(dark) {
+                val bars = if (dark) SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+                else SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+                onDispose { }
+            }
+            PairloomTheme(darkTheme = dark) {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     ConnectionScreen(ui = ui, actions = actions, modifier = Modifier.padding(innerPadding))
                 }

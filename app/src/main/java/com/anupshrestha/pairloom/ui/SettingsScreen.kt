@@ -1,6 +1,10 @@
 package com.anupshrestha.pairloom.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import com.anupshrestha.pairloom.session.Appearance
+import androidx.compose.material3.RadioButton
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -92,6 +96,9 @@ fun SettingsScreen(
                     onToggle = actions.onToggleOpus,
                 )
             }
+            Section(stringResource(R.string.appearance_title)) {
+                AppearanceChoice(ui.appearance, actions.onAppearance)
+            }
             Troubleshooting(ui, actions, link)
         }
     }
@@ -120,6 +127,28 @@ private fun SwitchRow(title: String, body: String, checked: Boolean, onToggle: (
         }
         Spacer(Modifier.width(12.dp))
         Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+@Composable
+private fun AppearanceChoice(current: Appearance, onChoose: (Appearance) -> Unit) {
+    val options = listOf(
+        Appearance.SYSTEM to R.string.appearance_system,
+        Appearance.DARK to R.string.appearance_dark,
+        Appearance.LIGHT to R.string.appearance_light,
+    )
+    Column(Modifier.selectableGroup()) {
+        options.forEach { (value, label) ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .selectable(selected = current == value, role = Role.RadioButton, onClick = { onChoose(value) }),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = current == value, onClick = null)
+                Spacer(Modifier.width(12.dp))
+                Text(stringResource(label), style = MaterialTheme.typography.bodyLarge)
+            }
+        }
     }
 }
 

@@ -7,7 +7,7 @@
     <string name="btn_join">Join</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_disconnect">Disconnect</string>
-    <string name="btn_rescan">Rescan</string>
+    <string name="btn_rescan">Search again</string>
     <string name="btn_open_location_settings">Open Location settings</string>
     <string name="btn_open_app_settings">Open app settings</string>
 
@@ -206,7 +206,7 @@
     <string name="switch_to">Use %1$s instead</string>
     <string name="new_title_first">Connect two phones</string>
     <string name="new_body">Open Pairloom on both phones. Choose Host on one and Join on the other.</string>
-    <string name="status_waiting">Waiting…</string>
+    <string name="status_waiting">Waiting for the other phone…</string>
     <string name="status_connecting_short">Connecting…</string>
     <string name="discover_title">Join a phone</string>
     <string name="discover_looking">Looking for nearby phones…</string>
@@ -246,4 +246,9 @@
     <string name="forget_body">To connect to it again, you will have to pair the phones again and compare the code.</string>
     <string name="forget_while_linked">Disconnect first to forget a phone or pair a new one.</string>
     <string name="other_phones">Your other phones</string>
+    <string name="appearance_title">Appearance</string>
+    <string name="appearance_system">Follow the phone</string>
+    <string name="appearance_dark">Dark (pure black)</string>
+    <string name="appearance_light">Light</string>
+    <string name="hosting_title">Hosting</string>
 </resources>
