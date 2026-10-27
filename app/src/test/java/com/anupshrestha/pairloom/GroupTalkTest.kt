@@ -8,6 +8,7 @@ import com.anupshrestha.pairloom.media.InProcessLink
 import com.anupshrestha.pairloom.media.MediaEnd
 import com.anupshrestha.pairloom.media.MediaSession
 import com.anupshrestha.pairloom.net.ControlProtocol.LeaveReason
+import com.anupshrestha.pairloom.net.ControlProtocol.LinkQuality
 import com.anupshrestha.pairloom.net.ControlProtocol.Message
 import com.anupshrestha.pairloom.security.toHex
 import org.junit.Assert.assertEquals
@@ -112,6 +113,61 @@ class GroupTalkTest {
             assertEquals(LeaveReason.REFUSED, sentB.filterIsInstance<Message.GroupLeave>().single().reason)
             assertEquals(listOf(true, false), host.roster.map { it.inTalk })
         } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun linkQualityFollowsWhatTheHubHears() {
+        assertEquals(LinkQuality.GOOD, GroupHost.linkQuality(10.0))
+        assertEquals(LinkQuality.FAIR, GroupHost.linkQuality(4.0))
+        assertEquals(LinkQuality.WEAK, GroupHost.linkQuality(0.5))
+        assertEquals(LinkQuality.LOST, GroupHost.linkQuality(0.0))
+    }
+
+    @Test
+    fun theRosterMarksTheHostAndKeepsADroppedPhoneAsOutOfRangeUntilItComesBack() {
+        val host = GroupHost(lo, qualityEveryMs = 0, departedKeepNanos = 60_000_000_000L)
+        val sent = Collections.synchronizedList(mutableListOf<Message>())
+        try {
+            host.link("Redmi", lo, key = "self", isHost = true) {}
+            val galaxy = host.link("Galaxy", lo, key = "g") { sent += it }!!
+            val pixel = host.link("Pixel", lo, key = "p") {}!!
+            assertEquals(listOf(true, false, false), host.roster.map { it.isHost })
+            host.unlink(pixel, dropped = true)
+            val gone = host.roster.single { it.name == "Pixel" }
+            assertEquals(LinkQuality.LOST, gone.quality)
+            assertFalse(gone.inTalk)
+            host.unlink(galaxy) // left with a goodbye: not shown
+            assertEquals(listOf("Redmi", "Pixel"), host.roster.map { it.name })
+            host.link("Pixel", lo, key = "p") {}
+            assertEquals(listOf("Redmi", "Pixel"), host.roster.map { it.name })
+            assertEquals(LinkQuality.UNKNOWN, host.roster.single { it.name == "Pixel" }.quality)
+            // Forgotten once out of range for too long.
+            val h2 = GroupHost(lo, qualityEveryMs = 0, departedKeepNanos = 1)
+            val x = h2.link("X", lo, key = "x") {}!!
+            h2.unlink(x, dropped = true)
+            h2.refreshLinks(System.nanoTime() + 10)
+            assertTrue(h2.roster.isEmpty())
+            h2.close()
+        } finally {
+            host.close()
+        }
+    }
+
+    @Test
+    fun membersInTheTalkAreMeasuredAsGoodOverLoopback() {
+        val host = GroupHost(lo, qualityEveryMs = 0)
+        val ended = Collections.synchronizedList(mutableListOf<MediaEnd>())
+        val links = listOf("Redmi", "Galaxy").map { member(host, it, ended) }
+        try {
+            links.forEach { it.member.join() }
+            waitFor("both in") { host.roster.count { it.inTalk } == 2 }
+            repeat(25) { host.refreshLinks(); Thread.sleep(100) }
+            assertEquals(listOf(LinkQuality.GOOD, LinkQuality.GOOD), host.roster.map { it.quality })
+            waitFor("members see it") { links.all { l -> l.member.roster.all { it.quality == LinkQuality.GOOD } } }
+        } finally {
+            links.forEach { it.close() }
             host.close()
         }
     }

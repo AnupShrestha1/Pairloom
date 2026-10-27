@@ -183,8 +183,8 @@ class ControlProtocolTest {
         val roster = Message.GroupRoster(
             3,
             listOf(
-                ControlProtocol.RosterEntry(0, "Redmi", true),
-                ControlProtocol.RosterEntry(3, "आशा", false),
+                ControlProtocol.RosterEntry(0, "Redmi", true, isHost = true, quality = ControlProtocol.LinkQuality.GOOD),
+                ControlProtocol.RosterEntry(3, "आशा", false, quality = ControlProtocol.LinkQuality.LOST),
             ),
         )
         for (m in listOf(
@@ -211,6 +211,7 @@ class ControlProtocolTest {
             frame(18, 1, 2),                 // FLOOR with two bytes
             frame(17, 1, 0, 0, 1, 5, 'a'.code), // ROSTER entry shorter than its name
             frame(17, 1, 0, 255, 0, 0),         // ROSTER entry with the "nobody" id
+            frame(17, 1, 0, 1, 5 shl 2, 0),     // ROSTER entry with an unknown link quality
             frame(17, 0, 0, 9),                 // ROSTER with trailing bytes
             frame(17, 0, 255),                  // ROSTER without the receiver's id
             frame(15, 0, 255, 1, 1, *IntArray(36)), // WELCOME with the "nobody" id

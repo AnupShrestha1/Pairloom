@@ -59,6 +59,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.material3.AlertDialog
+import com.anupshrestha.pairloom.net.ControlProtocol.LinkQuality
 import com.anupshrestha.pairloom.session.GroupDetails
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -177,7 +179,7 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
         ) { shown ->
             Column(Modifier.fillMaxSize()) {
                 when (shown) {
-                    Screen.RECONNECTING -> ui.reconnectingTo?.let { Reconnecting(it, actions) }
+                    Screen.RECONNECTING -> ui.reconnectingTo?.let { Reconnecting(it, ui.reconnectingRide, actions) }
                     Screen.INCOMING, Screen.CALL, Screen.PTT, Screen.LINKED ->
                         (link as? LinkState.Linked)?.let { Linked(it.details, ui.micDenied, actions) }
                     Screen.PAIRING -> (link as? LinkState.Pairing)?.let { Pairing(it, actions) }
@@ -333,7 +335,8 @@ private fun ColumnScope.Home(
     onPairNew: () -> Unit,
 ) {
     val canStart = !ui.cleaningUp
-    val problem = problemOf(ui.link)
+    val problem = ui.groupEndedBy?.let { stringResource(R.string.status_disconnected) to stringResource(R.string.group_ended_by, it) }
+        ?: problemOf(ui.link)
     Stage(
         mode = RingsMode.APART,
         title = device.name,
@@ -582,12 +585,12 @@ private fun ColumnScope.Discovering(state: LinkState.Discovering, waitingFor: St
 }
 
 @Composable
-private fun ColumnScope.Reconnecting(peer: String, actions: ConnectionActions) {
+private fun ColumnScope.Reconnecting(peer: String, ride: Boolean, actions: ConnectionActions) {
     Stage(
         mode = RingsMode.SEEKING,
         title = peer,
         status = stringResource(R.string.status_reconnecting),
-        content = { Body(stringResource(R.string.reconnecting_body)) },
+        content = { Body(if (ride) stringResource(R.string.reconnecting_ride_body, peer) else stringResource(R.string.reconnecting_body)) },
     ) {
         OutlinedButton(onClick = actions.onDisconnect, shape = RoundedCornerShape(20.dp), colors = outlinedOnBackground(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             Text(stringResource(R.string.btn_cancel), style = MaterialTheme.typography.labelLarge)
@@ -676,8 +679,36 @@ private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions
                     enabled = !group.joining,
                 )
             }
-            SecondButton(stringResource(R.string.btn_disconnect), actions.onDisconnect)
+            DisconnectButton(details, actions)
         }
+    }
+}
+
+/**
+ * Disconnect. On the hosting phone with other phones depending on it (beyond the one on the main
+ * link), it asks first: the group ends for everyone.
+ */
+@Composable
+private fun DisconnectButton(details: LinkDetails, actions: ConnectionActions) {
+    val others = details.group?.members.orEmpty()
+        .filter { !it.isThisPhone && it.quality != LinkQuality.LOST }
+        .map { it.name }
+    var asking by rememberSaveable { mutableStateOf(false) }
+    SecondButton(stringResource(R.string.btn_disconnect), {
+        if (details.isGroupOwner && others.size > 1) asking = true else actions.onDisconnect()
+    })
+    if (asking) {
+        AlertDialog(
+            onDismissRequest = { asking = false },
+            title = { Text(stringResource(R.string.end_group_title)) },
+            text = { Text(stringResource(R.string.end_group_body, others.joinToString(", "))) },
+            confirmButton = {
+                TextButton(onClick = { asking = false; actions.onDisconnect() }) {
+                    Text(stringResource(R.string.btn_end_group), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { asking = false }) { Text(stringResource(R.string.btn_keep_group)) } },
+        )
     }
 }
 
@@ -903,18 +934,31 @@ private fun GroupMembers(group: GroupDetails) {
     val dim = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
     val you = stringResource(R.string.group_you)
     val notIn = stringResource(R.string.group_not_in_talk)
+    val hostNote = stringResource(R.string.group_host)
+    val weak = stringResource(R.string.group_weak_link)
+    val away = stringResource(R.string.group_out_of_range)
     val text = buildAnnotatedString {
         group.members.forEachIndexed { i, m ->
             if (i > 0) withStyle(SpanStyle(color = dim)) { append("  ·  ") }
             val talking = m.hasFloor
             val color = when {
                 talking -> threads.peerText
+                m.quality == LinkQuality.LOST -> dim
+                m.quality == LinkQuality.WEAK -> MaterialTheme.colorScheme.error
                 m.inTalk -> normal
                 else -> dim
             }
             withStyle(SpanStyle(color = color, fontWeight = if (talking) FontWeight.SemiBold else null)) {
                 append(m.name)
-                val notes = listOfNotNull(you.takeIf { m.isThisPhone }, notIn.takeIf { !m.inTalk })
+                val notes = listOfNotNull(
+                    you.takeIf { m.isThisPhone },
+                    hostNote.takeIf { m.isHost },
+                    when (m.quality) {
+                        LinkQuality.LOST -> away
+                        LinkQuality.WEAK -> weak
+                        else -> notIn.takeIf { !m.inTalk }
+                    },
+                )
                 if (notes.isNotEmpty()) append(notes.joinToString(", ", " (", ")"))
             }
         }

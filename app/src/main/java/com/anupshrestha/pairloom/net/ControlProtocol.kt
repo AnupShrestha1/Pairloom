@@ -128,7 +128,28 @@ object ControlProtocol {
         data class Floor(val holderId: Int?) : Message
     }
 
-    data class RosterEntry(val id: Int, val name: String, val inTalk: Boolean)
+    /**
+     * One phone in a [Message.GroupRoster]: whether it is in the group talk, whether it is the
+     * hosting phone, and how well the hub hears it ([LinkQuality]).
+     */
+    data class RosterEntry(
+        val id: Int,
+        val name: String,
+        val inTalk: Boolean,
+        val isHost: Boolean = false,
+        val quality: Int = LinkQuality.UNKNOWN,
+    )
+
+    /** How well the hub hears a member, from the packets it received over the last seconds. */
+    object LinkQuality {
+        const val UNKNOWN = 0
+        const val GOOD = 1
+        const val FAIR = 2
+        const val WEAK = 3
+
+        /** Nothing heard: gone out of range (or left without a goodbye). */
+        const val LOST = 4
+    }
 
     /** [Message.GroupLeave] reasons. */
     object LeaveReason {
@@ -246,8 +267,10 @@ object ControlProtocol {
                 for (m in message.members) {
                     require(m.id in 0 until NOBODY) { "member id out of range" }
                     val name = truncateUtf8(m.name, MAX_NAME_BYTES)
+                    require(m.quality in LinkQuality.UNKNOWN..LinkQuality.LOST) { "link quality out of range" }
                     out.writeByte(m.id)
-                    out.writeByte(if (m.inTalk) 1 else 0)
+                    // Flags: bit 0 in the talk, bit 1 host, bits 2-4 link quality.
+                    out.writeByte((if (m.inTalk) 1 else 0) or (if (m.isHost) 2 else 0) or (m.quality shl 2))
                     out.writeByte(name.size)
                     out.write(name)
                 }
@@ -420,11 +443,12 @@ object ControlProtocol {
             val id = payload[at].toInt() and 0xFF
             val flags = payload[at + 1].toInt() and 0xFF
             val n = payload[at + 2].toInt() and 0xFF
-            if (id == NOBODY || flags > 1 || n > MAX_NAME_BYTES) throw ProtocolException("GROUP_ROSTER entry is malformed")
+            val quality = flags shr 2
+            if (id == NOBODY || quality > LinkQuality.LOST || n > MAX_NAME_BYTES) throw ProtocolException("GROUP_ROSTER entry is malformed")
             if (at + 3 + n > payload.size) throw ProtocolException("GROUP_ROSTER is too short")
             val name = String(payload, at + 3, n, Charsets.UTF_8)
             at += 3 + n
-            RosterEntry(id, name, flags == 1)
+            RosterEntry(id, name, flags and 1 != 0, flags and 2 != 0, quality)
         }
         if (at != payload.size) throw ProtocolException("GROUP_ROSTER has the wrong size")
         return Message.GroupRoster(yourId, members)

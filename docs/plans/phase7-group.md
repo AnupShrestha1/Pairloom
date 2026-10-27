@@ -225,3 +225,29 @@ promise.
   - they can pair properly afterwards.
 - **Host hand-over:** if the host leaves, the next phone with the code hosts and the others join
   it.
+
+## G5 results (2026-10-27)
+- **Roster**:
+  - each entry now carries "host" and the link quality the hub measures (good, fair, weak, out of
+    range), counted from what it received over the last two seconds;
+  - a phone that drops stays listed as "out of range" for up to 10 minutes, until it comes back;
+  - the member line reads, for example, "Redmi (you, host) · Galaxy · Virtual phone".
+- **Rides**:
+  - a dropped group keeps reconnecting for 30 minutes instead of 90 s, in the same role (a member
+    never starts hosting because of the keys);
+  - a phone that was in the talk rejoins it by itself.
+- **Endings**:
+  - Disconnect on a host with two or more phones depending on it asks "End the group for
+    everyone?";
+  - members say "Redmi ended the group." instead of "disconnected".
+- Tests: 132, including the quality rule, the host flag, and dropped phones kept and forgotten.
+- On both phones (Redmi hosting with the virtual phone, the A03s joined with "Join Redmi's group
+  instead"):
+  1. Both lines showed host and you as intended.
+  2. Killing the host's app put the A03s on "Lost the group … up to 30 minutes".
+  3. When the host came back, the A03s rejoined as a member ("as before") and was back in the
+     group talk by itself, 17 s after the host's Connect.
+  4. The host's Disconnect asked first. Keep kept the group; End for everyone ended it.
+  5. The A03s showed "Redmi ended the group."
+- Not checked on phones: "out of range" and the link-quality labels for a real third phone (the
+  virtual phone is in-process, so its link is always good).

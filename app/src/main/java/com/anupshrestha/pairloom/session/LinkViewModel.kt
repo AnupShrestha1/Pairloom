@@ -370,20 +370,23 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      * the lower fingerprint hosts, the other joins its group directly (retrying until it is up).
      * Without the other phone's group, this phone joins through the normal list instead.
      */
-    fun connectAuto(peerFingerprintHex: String) {
+    fun connectAuto(peerFingerprintHex: String) = connect(peerFingerprintHex, asHost = null)
+
+    /** Like [connectAuto], but with the role given ([asHost]) instead of taken from the keys. */
+    private fun connect(peerFingerprintHex: String, asHost: Boolean?) {
         val sec = security ?: return
         viewModelScope.launch {
             val device = withContext(Dispatchers.IO) { runCatching { sec.store.load() }.getOrNull() }
                 ?.firstOrNull { it.fingerprintHex == peerFingerprintHex } ?: return@launch
-            val host = hostsFor(sec.identity.fingerprintHex, peerFingerprintHex)
+            val host = asHost ?: hostsFor(sec.identity.fingerprintHex, peerFingerprintHex)
             when {
                 host -> {
-                    log("Connect: this phone hosts for ${device.name} (lower key)")
+                    log("Connect: this phone hosts for ${device.name} (${if (asHost == null) "lower key" else "as before"})")
                     peerChannelHint = device.staFrequencyMhz.takeIf { it in 2412..2484 }
                     start(Role.HOST)
                 }
                 device.groupName != null && Build.VERSION.SDK_INT >= 29 -> {
-                    log("Connect: this phone joins ${device.name} directly (higher key)")
+                    log("Connect: this phone joins ${device.name} directly (${if (asHost == null) "higher key" else "as before"})")
                     connectPaired(peerFingerprintHex)
                 }
                 else -> {
@@ -402,28 +405,32 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      * After a dropped link: runs Connect again (same roles, from the keys) until the link is back
      * or [RECONNECT_WINDOW_MS] has passed. The other phone does the same, since it saw the drop too.
      */
-    private fun startReconnecting(peerFingerprintHex: String) {
+    private fun startReconnecting(peerFingerprintHex: String, ride: Boolean, wasHost: Boolean) {
         reconnectJob?.cancel()
-        log("The link dropped; reconnecting for up to ${RECONNECT_WINDOW_MS / 1000} s")
+        // A ride (a group) keeps trying much longer, and in the same role: a member that joined
+        // the host's group must not start hosting because of the keys.
+        val window = if (ride) RIDE_RECONNECT_WINDOW_MS else RECONNECT_WINDOW_MS
+        log("The link dropped; reconnecting for up to ${window / 1000} s${if (ride) " (a ride)" else ""}")
         reconnectJob = viewModelScope.launch {
-            val deadline = SystemClock.elapsedRealtime() + RECONNECT_WINDOW_MS
+            val deadline = SystemClock.elapsedRealtime() + window
             while (SystemClock.elapsedRealtime() < deadline) {
                 // Wait until the previous attempt has finished and Wi-Fi Direct is cleaned up.
                 while (_ui.value.cleaningUp || _ui.value.link.isActive) {
                     if (_ui.value.link is LinkState.Linked) {
                         log("Reconnected")
-                        _ui.update { it.copy(reconnectingTo = null) }
+                        _ui.update { it.copy(reconnectingTo = null, reconnectingRide = false) }
                         return@launch
                     }
                     if (SystemClock.elapsedRealtime() >= deadline) break
                     delay(500)
                 }
                 if (SystemClock.elapsedRealtime() >= deadline) break
-                connectAuto(peerFingerprintHex)
+                connect(peerFingerprintHex, asHost = if (ride) wasHost else null)
                 delay(2_000)
             }
-            log("Could not reconnect within ${RECONNECT_WINDOW_MS / 1000} s")
-            _ui.update { it.copy(reconnectingTo = null) }
+            log("Could not reconnect within ${window / 1000} s")
+            rejoinTalk = false
+            _ui.update { it.copy(reconnectingTo = null, reconnectingRide = false) }
             if (_ui.value.link.isActive && _ui.value.link !is LinkState.Linked) {
                 teardown(LinkState.Disconnected(DisconnectReason.LINK_TIMEOUT, null), sendBye = false)
             }
@@ -433,8 +440,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopReconnecting() {
         reconnectJob?.cancel()
         reconnectJob = null
-        if (_ui.value.reconnectingTo != null) _ui.update { it.copy(reconnectingTo = null) }
+        rejoinTalk = false
+        if (_ui.value.reconnectingTo != null) _ui.update { it.copy(reconnectingTo = null, reconnectingRide = false) }
     }
+
+    /** After a dropped ride: join the group talk again once the link is back, as before the drop. */
+    @Volatile private var rejoinTalk = false
 
     /** A direct join waiting for the join screen to open ([connectPaired]). */
     @Volatile private var pendingDirectJoin: String? = null
@@ -755,7 +766,20 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      * any other member; the phone it linked with first becomes a member, and so does every paired
      * phone that connects later ([acceptMembers]).
      */
-    private fun setUpGroup(isGroupOwner: Boolean, local: InetAddress, remote: InetAddress, ch: ControlChannel, peerName: String) {
+    private fun setUpGroup(isGroupOwner: Boolean, local: InetAddress, remote: InetAddress, ch: ControlChannel, peerName: String, peerKey: String) {
+        setUpGroupLinks(isGroupOwner, local, remote, ch, peerName, peerKey)
+        val g = group ?: return
+        if (rejoinTalk) {
+            rejoinTalk = false
+            log("Back after a drop: rejoining the group talk")
+            viewModelScope.launch(Dispatchers.IO) {
+                delay(REJOIN_TALK_DELAY_MS) // the host sets up its side of the link first
+                if (group === g && media?.isBusy != true) runCatching { g.join() }.onFailure { log("Could not rejoin the group talk: ${it.message}") }
+            }
+        }
+    }
+
+    private fun setUpGroupLinks(isGroupOwner: Boolean, local: InetAddress, remote: InetAddress, ch: ControlChannel, peerName: String, peerKey: String) {
         if (!isGroupOwner) {
             group = newGroupMember(local, remote) { ch.sendMessage(it) }
             return
@@ -768,10 +792,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         )
         groupHost = host
         groupLocal = local
-        val own = InProcessLink(host, names.ownName, local) { send -> newGroupMember(local, local, send) }
+        val own = InProcessLink(host, names.ownName, local, isHost = true) { send -> newGroupMember(local, local, send) }
         ownGroupLink = own
         group = own.member
-        primaryMemberId = host.link(peerName, remote) { ch.sendMessage(it) }
+        primaryMemberId = host.link(peerName, remote, key = peerKey) { ch.sendMessage(it) }
     }
 
     private fun groupDetails(g: GroupMemberLink): GroupDetails? {
@@ -780,7 +804,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val me = g.ownId
         val holder = g.floorHolder
         return GroupDetails(
-            members = roster.map { GroupMemberUi(it.name, it.inTalk, it.id == me, holder != null && it.id == holder) },
+            members = roster.map { GroupMemberUi(it.name, it.inTalk, it.id == me, holder != null && it.id == holder, it.isHost, it.quality) },
             inTalk = g.isBusy,
             joining = g.isJoining,
             floorHolder = holder?.let { h -> roster.firstOrNull { it.id == h }?.name },
@@ -1343,7 +1367,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             }
             val ch = established.channel
             val name = established.peer.name
-            val id = groupHost?.link(name, established.remoteAddress) { ch.sendMessage(it) }
+            val id = groupHost?.link(name, established.remoteAddress, key = established.peer.fingerprintHex) { ch.sendMessage(it) }
             if (id == null) {
                 log("Turned away $name: the group is full")
                 ch.close(sendBye = true)
@@ -1369,7 +1393,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 log("$name left the link: $exit")
                 withContext(Dispatchers.Main) {
                     if (gen != generation) return@withContext
-                    if (primaryMemberId == id) onChannelEnded(exit) else groupHost?.unlink(id)
+                    if (primaryMemberId == id) onChannelEnded(exit) else groupHost?.unlink(id, dropped = exit.isDrop)
                 }
             }
         }
@@ -1540,7 +1564,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val remote = LinkEndpoint.toIpv4(established.remoteAddress)
         if (local != null && remote != null) {
             media = newNegotiation(isGroupOwner, local, remote, ch)
-            setUpGroup(isGroupOwner, local, remote, ch, established.peer.name)
+            setUpGroup(isGroupOwner, local, remote, ch, established.peer.name, established.peer.fingerprintHex)
             startMediaPoll(generation)
         } else {
             log("Media unavailable: the link addresses are not IPv4")
@@ -1573,7 +1597,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val (id, next) = extraMembers.entries.firstOrNull()?.toPair() ?: return false
         val linked = _ui.value.link as? LinkState.Linked ?: return false
         extraMembers.remove(id)
-        primaryMemberId?.let { host.unlink(it) }
+        primaryMemberId?.let { host.unlink(it, dropped = exit.isDrop) }
         primaryMemberId = id
         channel = next.channel
         linkedPeerFingerprint = next.fingerprintHex
@@ -1597,6 +1621,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         )
         return true
     }
+
+    /** The link went without a goodbye (out of range, most likely), not because someone ended it. */
+    private val ControlChannel.Exit.isDrop: Boolean
+        get() = this == ControlChannel.Exit.LinkTimeout || this is ControlChannel.Exit.IoError
 
     private fun onStats(stats: PingStats, gen: Int) {
         _ui.update { s ->
@@ -1650,11 +1678,19 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val droppedPeer = linkedPeerFingerprint.takeIf {
             linked != null && finalState is LinkState.Disconnected && finalState.reason in DROP_REASONS
         }
+        // A group with more than two phones, or a group talk, counts as a ride.
+        val ride = (group?.roster?.size ?: 0) > 2 || group?.isBusy == true
+        val wasHost = linked?.details?.isGroupOwner == true
         if (droppedPeer != null) {
             media?.kind?.takeIf { media?.session != null && it != MediaKind.TONE }?.let { lastEnd = it to MediaEnd.LINK_LOST }
             if (group?.session != null) lastEnd = MediaKind.PTT to MediaEnd.LINK_LOST
+            rejoinTalk = ride && group?.isBusy == true
             // Before the link state changes, so the notification (and the foreground service) stays.
-            _ui.update { it.copy(reconnectingTo = linked?.details?.peerName) }
+            _ui.update { it.copy(reconnectingTo = linked?.details?.peerName, reconnectingRide = ride) }
+        }
+        // A member told the group is over (the host's goodbye) says so, rather than "disconnected".
+        if (linked != null && !wasHost && ride && finalState is LinkState.Disconnected && finalState.reason == DisconnectReason.PEER_CLOSED) {
+            _ui.update { it.copy(groupEndedBy = linked.details.peerName) }
         }
         generation++
         timeoutJob?.cancel()
@@ -1732,13 +1768,13 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (finalState != null) setLink(finalState)
-        if (droppedPeer != null) startReconnecting(droppedPeer)
+        if (droppedPeer != null) startReconnecting(droppedPeer, ride, wasHost)
     }
 
     // ---- Helpers -----------------------------------------------------------------------------
 
     private fun setLink(state: LinkState) {
-        _ui.update { it.copy(link = state) }
+        _ui.update { it.copy(link = state, groupEndedBy = if (state.isActive) null else it.groupEndedBy) }
         if (!state.isActive) {
             pendingDirectJoin = null
             if (_ui.value.waitingFor != null) _ui.update { it.copy(waitingFor = null) }
@@ -1860,6 +1896,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val DIRECT_RETRY_MS = 5_000L
         const val RECONNECT_WINDOW_MS = 90_000L
         const val BYE_GRACE_MS = 300L
+
+        /** How long a dropped ride keeps trying to come back (a ride can take people out of range for a while). */
+        const val RIDE_RECONNECT_WINDOW_MS = 30 * 60_000L
+        const val REJOIN_TALK_DELAY_MS = 1_000L
 
         /** How a link to a paired phone ends when nobody chose to end it. */
         val DROP_REASONS = setOf(DisconnectReason.LINK_TIMEOUT, DisconnectReason.GROUP_ENDED, DisconnectReason.IO_ERROR)

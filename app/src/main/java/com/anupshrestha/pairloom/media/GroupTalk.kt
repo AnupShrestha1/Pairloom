@@ -2,6 +2,7 @@ package com.anupshrestha.pairloom.media
 
 import com.anupshrestha.pairloom.net.ControlProtocol
 import com.anupshrestha.pairloom.net.ControlProtocol.LeaveReason
+import com.anupshrestha.pairloom.net.ControlProtocol.LinkQuality
 import com.anupshrestha.pairloom.net.ControlProtocol.Message
 import com.anupshrestha.pairloom.net.ControlProtocol.RosterEntry
 import com.anupshrestha.pairloom.security.hexToBytesOrNull
@@ -29,8 +30,10 @@ private fun serialExecutor(name: String): ExecutorService = Executors.newSingleT
  * group's codec (Opus if the host and that member both have it, otherwise PCM); a later member
  * that cannot use it is refused. The hub stops when the last member leaves.
  *
- * Every phone on the link gets the roster (who is linked, who is in the talk), and the members in
- * the talk get FLOOR whenever it changes. Messages go out in order on one thread, so this class
+ * Every phone on the link gets the roster (who is linked, who is in the talk, who hosts, how well
+ * the hub hears each member), and the members in the talk get FLOOR whenever it changes. A phone
+ * whose link dropped stays in the roster as out of range for [departedKeepNanos], until it comes
+ * back. Messages go out in order on one thread, so this class
  * never does network I/O while holding its lock, and the hub's floor callback never waits for it.
  */
 class GroupHost(
@@ -42,9 +45,36 @@ class GroupHost(
     /** The roster or the floor changed (any thread). */
     private val onChanged: () -> Unit = {},
     private val random: SecureRandom = SecureRandom(),
+    /** How often link quality is measured; 0 for never (tests call [refreshLinks]). */
+    qualityEveryMs: Long = 1_000,
+    private val departedKeepNanos: Long = 10 * 60 * 1_000_000_000L,
 ) : Closeable {
-    private class Linked(val id: Int, val name: String, val address: InetAddress, val send: (Message) -> Unit) {
+    private class Linked(
+        val id: Int,
+        val name: String,
+        val address: InetAddress,
+        /** Who the phone is (its key), so a phone that comes back replaces its out-of-range entry. */
+        val key: String,
+        val isHost: Boolean,
+        val send: (Message) -> Unit,
+    ) {
         var inTalk = false
+        var quality = LinkQuality.UNKNOWN
+
+        /** (time, packets received by the hub) samples over the last [QUALITY_WINDOW_NANOS]. */
+        val samples = ArrayDeque<Pair<Long, Long>>()
+    }
+
+    /** A phone whose link dropped: shown as out of range until it comes back or [departedKeepNanos] pass. */
+    private class Departed(val id: Int, val name: String, val since: Long)
+
+    private val departed = LinkedHashMap<String, Departed>()
+    private val ticker = if (qualityEveryMs > 0) {
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { Thread(it, "pl-group-tick").apply { isDaemon = true } }.also {
+            it.scheduleWithFixedDelay({ runCatching { refreshLinks() } }, qualityEveryMs, qualityEveryMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+    } else {
+        null
     }
 
     private val lock = Any()
@@ -63,22 +93,56 @@ class GroupHost(
     /** The hub's per-member statistics, by member id (empty while nobody is in the talk). */
     fun hubStats(): Map<Int, MemberStats> = synchronized(lock) { hub?.stats()?.mapKeys { it.key.toInt() } ?: emptyMap() }
 
-    /** A phone on the link; returns its member id, or null if the roster is full. */
-    fun link(name: String, address: InetAddress, send: (Message) -> Unit): Int? = synchronized(lock) {
+    /**
+     * A phone on the link; returns its member id, or null if the roster is full. [key] says who it
+     * is (a phone that comes back after dropping out has the same key); [isHost] marks the hosting
+     * phone's own user.
+     */
+    fun link(name: String, address: InetAddress, key: String = "", isHost: Boolean = false, send: (Message) -> Unit): Int? = synchronized(lock) {
+        if (key.isNotEmpty() && departed.remove(key) != null) log("Group: $name is back")
         if (linked.size >= ControlProtocol.MAX_ROSTER) return null
         val id = nextId++
-        linked[id] = Linked(id, name, address, send)
+        linked[id] = Linked(id, name, address, key, isHost, send)
         log("Group: $name linked as member $id")
         broadcastRosterLocked()
         id
     }
 
-    /** The phone's link ended. */
-    fun unlink(id: Int) = synchronized(lock) {
+    /** The phone's link ended; with [dropped], it went without a goodbye and is shown as out of range. */
+    fun unlink(id: Int, dropped: Boolean = false) = synchronized(lock) {
         val m = linked.remove(id) ?: return
         if (m.inTalk) leaveLocked(m)
-        log("Group: ${m.name} (member $id) unlinked")
+        if (dropped && m.key.isNotEmpty()) departed[m.key] = Departed(nextId++, m.name, System.nanoTime())
+        log("Group: ${m.name} (member $id) ${if (dropped) "dropped out" else "unlinked"}")
         broadcastRosterLocked()
+    }
+
+    /**
+     * Measures how well the hub hears each member in the talk (from the packets it received over
+     * the last two seconds: probes alone bring about ten a second) and forgets phones that have
+     * been out of range too long. Sends the roster again if anything changed.
+     */
+    fun refreshLinks(now: Long = System.nanoTime()) = synchronized(lock) {
+        var changed = false
+        val stats = hub?.stats()
+        for (m in linked.values) {
+            val q = if (!m.inTalk || stats == null) {
+                m.samples.clear()
+                LinkQuality.UNKNOWN
+            } else {
+                val received = stats[m.id.toString()]?.received ?: 0
+                m.samples.addLast(now to received)
+                while (m.samples.size > 1 && now - m.samples.first().first > QUALITY_WINDOW_NANOS) m.samples.removeFirst()
+                val (t0, r0) = m.samples.first()
+                if (now - t0 < QUALITY_WINDOW_NANOS / 2) m.quality else linkQuality((received - r0) * 1e9 / (now - t0))
+            }
+            if (q != m.quality) {
+                m.quality = q
+                changed = true
+            }
+        }
+        if (departed.values.removeAll { now - it.since > departedKeepNanos }) changed = true
+        if (changed) broadcastRosterLocked()
     }
 
     /** A group-talk message from member [id] (any thread). */
@@ -158,7 +222,11 @@ class GroupHost(
         onChanged()
     }
 
-    private fun rosterLocked() = linked.values.map { RosterEntry(it.id, it.name, it.inTalk) }
+    private fun rosterLocked(): List<RosterEntry> {
+        val here = linked.values.map { RosterEntry(it.id, it.name, it.inTalk, it.isHost, it.quality) }
+        val gone = departed.values.map { RosterEntry(it.id, it.name, inTalk = false, quality = LinkQuality.LOST) }
+        return (here + gone).take(ControlProtocol.MAX_ROSTER)
+    }
 
     private fun broadcastRosterLocked() {
         val roster = rosterLocked()
@@ -175,8 +243,10 @@ class GroupHost(
     }
 
     override fun close() {
+        ticker?.shutdownNow()
         synchronized(lock) {
             linked.values.forEach { it.inTalk = false }
+            departed.clear()
             hub?.stop()
             hub = null
             codec = null
@@ -184,6 +254,18 @@ class GroupHost(
             linked.clear()
         }
         outbox.shutdown()
+    }
+
+    companion object {
+        const val QUALITY_WINDOW_NANOS = 2_000_000_000L
+
+        /** Packets a second the hub receives from a member (about ten when the link is fine). */
+        fun linkQuality(packetsPerSecond: Double): Int = when {
+            packetsPerSecond >= 7.0 -> LinkQuality.GOOD
+            packetsPerSecond >= 3.0 -> LinkQuality.FAIR
+            packetsPerSecond > 0.0 -> LinkQuality.WEAK
+            else -> LinkQuality.LOST
+        }
     }
 }
 
@@ -340,6 +422,7 @@ class InProcessLink(
     private val host: GroupHost,
     name: String,
     address: InetAddress,
+    isHost: Boolean = false,
     makeMember: (send: (Message) -> Unit) -> GroupMemberLink,
 ) : Closeable {
     private val up = serialExecutor("pl-group-up")
@@ -350,7 +433,7 @@ class InProcessLink(
     val member: GroupMemberLink = makeMember { message -> up.execute { host.onMessage(id, message) } }
 
     init {
-        id = host.link(name, address) { message -> runCatching { down.execute { member.onMessage(message) } } }
+        id = host.link(name, address, isHost = isHost) { message -> runCatching { down.execute { member.onMessage(message) } } }
             ?: throw IllegalStateException("the group is full")
     }
 

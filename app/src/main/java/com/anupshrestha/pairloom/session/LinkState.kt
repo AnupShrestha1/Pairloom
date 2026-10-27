@@ -155,7 +155,15 @@ data class GroupDetails(
     val floorIsMine: Boolean,
 )
 
-data class GroupMemberUi(val name: String, val inTalk: Boolean, val isThisPhone: Boolean, val hasFloor: Boolean = false)
+data class GroupMemberUi(
+    val name: String,
+    val inTalk: Boolean,
+    val isThisPhone: Boolean,
+    val hasFloor: Boolean = false,
+    val isHost: Boolean = false,
+    /** [com.anupshrestha.pairloom.net.ControlProtocol.LinkQuality]. */
+    val quality: Int = 0,
+)
 
 /** A paired phone as shown in the list. */
 data class PairedDeviceUi(
@@ -214,6 +222,10 @@ data class LinkUiState(
     val micDenied: Boolean = false,
     /** The paired phone being reconnected to after a dropped link, while that runs. */
     val reconnectingTo: String? = null,
+    /** The dropped link was a group (a ride): reconnecting runs much longer. */
+    val reconnectingRide: Boolean = false,
+    /** A member phone whose host ended the group: the host's name, until the next link starts. */
+    val groupEndedBy: String? = null,
     /** The paired phone a home-screen Connect is waiting for (until the link ends). */
     val waitingFor: String? = null,
     /** Diagnostics: whether this phone offers Opus for voice. */
