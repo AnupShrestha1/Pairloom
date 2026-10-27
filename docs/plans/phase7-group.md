@@ -26,14 +26,19 @@ The code assumes one other phone throughout:
   going back in time to the listener's jitter buffer.
 
 ### Floor control
-- Pressing Talk asks the hub for the floor (FLOOR_REQUEST). The hub grants it if nobody is talking,
-  and tells everyone who has it (FLOOR: talker, or nobody). Releasing gives it back.
-- If someone else has the floor: a short "busy" buzz, and "Asha is talking" stays on screen.
-- The hub takes the floor back if the talker's phone disappears, or after 60 s of holding.
+- The floor goes to whoever the hub hears first while nobody is talking, and the hub tells everyone
+  who has it (FLOOR: talker, or nobody). The talker's TALK_END gives it back. No request message is
+  needed, so a lost message can never leave someone holding a floor they did not ask for.
+- Someone who presses Talk while another person has the floor is not relayed for that whole press,
+  even if the floor frees up meanwhile (press again, like a walkie-talkie). Their phone shows a
+  short "busy" buzz, and "Asha is talking" stays on screen.
+- The hub takes the floor back after 0.5 s without the talker's audio (a lost TALK_END, or a phone
+  that went away), and after 60 s of holding.
+- The hosting phone's own user joins the hub like any other member, through an ordinary session on
+  a loopback socket, so the relay has no special case for the host.
 
 ### Control protocol (version 7) additions
-GROUP_ROSTER (members' names and ids), FLOOR_REQUEST, FLOOR_RELEASE, FLOOR (holder id or none),
-and a group kind for MEDIA_OFFER.
+GROUP_ROSTER (members' names and ids), FLOOR (holder id or none), and a group kind for MEDIA_OFFER.
 
 ### Simulating a third phone (only two real phones exist)
 1. **On the computer, in tests**: the hub and several members as real UDP and TLS endpoints on
@@ -66,3 +71,18 @@ and a group kind for MEDIA_OFFER.
 - Wi-Fi Direct groups have a client limit that varies by phone (often 4-8).
 - The hub's radio carries every stream twice (in and out), and more on 2.4 GHz with more members.
 - MIUI and One UI background limits apply to the hub as in Phase 5.
+
+## G1 results (2026-10-27)
+- `media/GroupHub.kt`: `Floor`, `Restamper` and the `GroupHub` relay (one thread, one UDP socket,
+  a key pair per member, never decodes). It answers members' probes and probes each member, so
+  every phone keeps its round-trip measure.
+- `GroupHubTest` (5 tests) runs real loopback UDP with three simulated phones, each an unchanged
+  push-to-talk `MediaSession`, with frames tagged with the talker and position:
+  - phone 1 then phone 2 talk; each listener plays the frames whole and in order, and no phone
+    hears itself;
+  - phones 1 and 3 press together: 1 keeps the floor, 3 is heard by nobody for that press, then is
+    heard on its next one;
+  - a phone that vanishes mid-spurt frees the floor within 0.5 s, and the others carry on.
+- Full suite: 121 tests, passing on three runs in a row.
+- Not covered on the computer: Opus across talkers (one decoder fed by two encoders in turn), which
+  the device checks will listen for.
