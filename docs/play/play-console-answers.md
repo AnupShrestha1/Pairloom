@@ -22,7 +22,8 @@ wording when you fill it in: Google changes these forms from time to time.
 > Good for keeping in touch around the house, across a building site or campsite, on a hike, or
 > anywhere without signal. Range depends on the phones, walls and interference.
 >
-> Both phones need Pairloom open: calls end when the app leaves the screen.
+> Calls keep going with the screen off or another app open, and a dropped link reconnects by
+> itself. Incoming calls ring as a call notification.
 
 - **Category**: Communication
 - **Tags**: intercom, walkie-talkie, offline
