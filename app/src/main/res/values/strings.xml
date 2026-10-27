@@ -3,8 +3,8 @@
     <string name="home_tagline">Local voice intercom for two phones</string>
 
     <!-- Buttons -->
-    <string name="btn_host">Wait for the other phone</string>
-    <string name="btn_join">Find the other phone</string>
+    <string name="btn_host">Host</string>
+    <string name="btn_join">Join</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_disconnect">Disconnect</string>
     <string name="btn_rescan">Rescan</string>
@@ -30,13 +30,13 @@
     <!-- Hosting -->
     <string name="status_hosting_starting">Creating the Wi-Fi Direct group…</string>
     <string name="status_hosting_ready">Waiting for the other phone</string>
-    <string name="hosting_ready_body">On the other phone, tap Find the other phone and pick this one. Accept the connection prompt here if one appears.</string>
+    <string name="hosting_ready_body">On the other phone, tap Join and pick this one. Accept the connection prompt here if one appears.</string>
     <string name="hosting_network_name">Group name: %1$s</string>
 
     <!-- Discovering -->
     <string name="status_discovering">Looking for nearby phones</string>
     <string name="discovering_body">Make sure the other phone is on Host, then tap it below.</string>
-    <string name="discovering_none">Nothing found yet. Check that the other phone is waiting and that Wi-Fi is on, then tap Search again.</string>
+    <string name="discovering_none">Nothing found yet. Check that the other phone is hosting and that Wi-Fi is on, then tap Search again.</string>
     <string name="peer_type_phone">Phone</string>
     <string name="peer_type_other">Other device</string>
     <string name="peer_status_available">available</string>
@@ -205,10 +205,10 @@
     <string name="btn_pair_new">Pair a new phone</string>
     <string name="switch_to">Use %1$s instead</string>
     <string name="new_title_first">Connect two phones</string>
-    <string name="new_body">Open Pairloom on both phones. On one, tap Wait for the other phone; on the other, tap Find the other phone.</string>
+    <string name="new_body">Open Pairloom on both phones. Choose Host on one and Join on the other.</string>
     <string name="status_waiting">Waiting…</string>
     <string name="status_connecting_short">Connecting…</string>
-    <string name="discover_title">Find the other phone</string>
+    <string name="discover_title">Join a phone</string>
     <string name="discover_looking">Looking for nearby phones…</string>
     <string name="discover_pick">Tap the other phone</string>
     <string name="status_reconnecting">Reconnecting…</string>
@@ -231,4 +231,19 @@
     <string name="rename_paired_hint">Only on this phone. Leave it empty to use the name the other phone sends.</string>
     <string name="btn_rename">Rename</string>
     <string name="btn_save">Save</string>
+    <string name="host_explain">This phone waits for the other one</string>
+    <string name="join_explain">Find the phone that is hosting</string>
+    <string name="settings_title">Settings</string>
+    <string name="your_phones_title">Your phones</string>
+    <string name="this_phone_body">The name the other phone sees</string>
+    <string name="phone_key">Key %1$s</string>
+    <string name="calls_title">Calls</string>
+    <string name="opus_title">Opus voice</string>
+    <string name="opus_body">Clearer when a screen is off, using less Wi-Fi; about 15 ms more delay. Used when both phones have it on.</string>
+    <string name="btn_show_troubleshooting">Show troubleshooting information</string>
+    <string name="btn_hide_troubleshooting">Hide troubleshooting information</string>
+    <string name="forget_title">Forget %1$s?</string>
+    <string name="forget_body">To connect to it again, you will have to pair the phones again and compare the code.</string>
+    <string name="forget_while_linked">Disconnect first to forget a phone.</string>
+    <string name="other_phones">Your other phones</string>
 </resources>

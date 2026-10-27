@@ -5,12 +5,14 @@ import androidx.compose.ui.graphics.Color
 // Pairloom's own palette ("two threads", docs/plans/phase6-ux.md). Teal is this phone's thread,
 // saffron the other phone's; red is only for ending and errors.
 
-val IndigoNight = Color(0xFF16213E)
-val IndigoSurface = Color(0xFF1C2948)
-val IndigoRaised = Color(0xFF26355C)
-val IndigoOutline = Color(0xFF3A4A72)
-val Mist = Color(0xFF9AA8BC)
-val NightText = Color(0xFFE8EDF5)
+// Dark theme: true black, so AMOLED screens switch those pixels off (and the neon rings stand out);
+// surfaces are lifted just enough to separate buttons and cards.
+val PitchBlack = Color(0xFF000000)
+val NightSurface = Color(0xFF111316)
+val NightRaised = Color(0xFF1B1E23)
+val NightOutline = Color(0xFF34383F)
+val Mist = Color(0xFF9EA5AF)
+val NightText = Color(0xFFECEEF1)
 
 val CoolPaper = Color(0xFFEEF1F5)
 val PaperSurface = Color(0xFFF8FAFC)

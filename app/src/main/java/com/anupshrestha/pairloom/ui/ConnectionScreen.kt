@@ -55,6 +55,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.anupshrestha.pairloom.R
@@ -113,20 +114,25 @@ class ConnectionActions(
  */
 @Composable
 fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modifier = Modifier) {
-    var showDetails by rememberSaveable { mutableStateOf(false) }
-    if (showDetails) {
-        BackHandler { showDetails = false }
-        DetailsScreen(ui, actions, onClose = { showDetails = false }, modifier = modifier)
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var pairingNew by rememberSaveable { mutableStateOf(false) }
+    if (showSettings) {
+        BackHandler { showSettings = false }
+        SettingsScreen(
+            ui, actions,
+            onClose = { showSettings = false },
+            onPairNew = { showSettings = false; pairingNew = true },
+            modifier = modifier,
+        )
         return
     }
-    var pairingNew by rememberSaveable { mutableStateOf(false) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     val link = ui.link
     LaunchedEffect(link.isActive) { if (link.isActive) pairingNew = false }
     if (pairingNew) BackHandler { pairingNew = false }
 
     Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        TopBar(onDetails = { showDetails = true })
+        TopBar(onSettings = { showSettings = true })
         val reconnecting = ui.reconnectingTo?.takeIf { link !is LinkState.Linked }
         val device = ui.pairedDevices.firstOrNull { it.fingerprintHex == selected } ?: ui.pairedDevices.firstOrNull()
         when {
@@ -143,8 +149,7 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
 }
 
 @Composable
-private fun TopBar(onDetails: () -> Unit) {
-    val label = stringResource(R.string.details_title)
+private fun TopBar(onSettings: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
             stringResource(R.string.app_name),
@@ -152,8 +157,10 @@ private fun TopBar(onDetails: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
-        IconButton(onClick = onDetails, modifier = Modifier.semantics { contentDescription = label }) {
-            GlyphIcon(Glyph.INFO, MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(onClick = onSettings, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onBackground)) {
+            GlyphIcon(Glyph.SETTINGS, MaterialTheme.colorScheme.onBackground, size = 20.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -249,6 +256,17 @@ private fun BigButton(
 @Composable
 private fun outlinedOnBackground() = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground)
 
+/** A secondary action: outlined, full width, plainly visible (Pair a new phone, Disconnect, Cancel). */
+@Composable
+private fun SecondButton(text: String, onClick: () -> Unit, enabled: Boolean = true) =
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(20.dp),
+        colors = outlinedOnBackground(),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+    ) { Text(text, style = MaterialTheme.typography.labelLarge) }
+
 @Composable
 private fun QuietButton(text: String, onClick: () -> Unit, enabled: Boolean = true) =
     TextButton(onClick = onClick, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -277,10 +295,8 @@ private fun ColumnScope.Home(
             if (ui.cleaningUp) Body(stringResource(R.string.cleaning_up))
             LocationAndPermission(ui, actions)
             if (ui.pairedDevices.size > 1) {
-                Spacer(Modifier.height(12.dp))
-                ui.pairedDevices.filter { it.fingerprintHex != device.fingerprintHex }.forEach { other ->
-                    OutlinedButton(onClick = { onSelect(other.fingerprintHex) }) { Text(stringResource(R.string.switch_to, other.name)) }
-                }
+                Spacer(Modifier.height(16.dp))
+                OtherPhones(ui.pairedDevices.filter { it.fingerprintHex != device.fingerprintHex }, canStart, actions, onSelect)
             }
         },
     ) {
@@ -295,11 +311,40 @@ private fun ColumnScope.Home(
             onClick = { actions.onConnectAuto(device.fingerprintHex) },
             enabled = canStart,
         )
-        QuietButton(stringResource(R.string.btn_pair_new), onPairNew, enabled = canStart)
+        SecondButton(stringResource(R.string.btn_pair_new), onPairNew, enabled = canStart)
     }
 }
 
-/** First run, or "Pair a new phone": one phone waits, the other finds it. */
+/** The other paired phones, each with its own Connect; tapping a name shows it at the top. */
+@Composable
+private fun OtherPhones(phones: List<PairedDeviceUi>, canStart: Boolean, actions: ConnectionActions, onSelect: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.other_phones),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.semantics { heading() },
+        )
+        phones.forEach { p ->
+            Surface(
+                onClick = { onSelect(p.fingerprintHex) },
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).background(LocalThreads.current.peer, CircleShape))
+                    Spacer(Modifier.width(14.dp))
+                    Text(p.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { onSelect(p.fingerprintHex); actions.onConnectAuto(p.fingerprintHex) }, enabled = canStart) {
+                        Text(stringResource(R.string.btn_connect))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** First run, or "Pair a new phone": one phone hosts, the other joins it. */
 @Composable
 private fun ColumnScope.NewPhone(firstTime: Boolean, ui: LinkUiState, actions: ConnectionActions, onCancel: () -> Unit) {
     val problem = problemOf(ui.link)
@@ -313,15 +358,9 @@ private fun ColumnScope.NewPhone(firstTime: Boolean, ui: LinkUiState, actions: C
             LocationAndPermission(ui, actions)
         },
     ) {
-        BigButton(stringResource(R.string.btn_host), onClick = actions.onHost, enabled = !ui.cleaningUp)
-        OutlinedButton(
-            onClick = actions.onJoin,
-            enabled = !ui.cleaningUp,
-            shape = RoundedCornerShape(20.dp),
-            colors = outlinedOnBackground(),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp),
-        ) { Text(stringResource(R.string.btn_join), style = MaterialTheme.typography.labelLarge) }
-        if (!firstTime) QuietButton(stringResource(R.string.btn_cancel), onCancel)
+        ChoiceButton(stringResource(R.string.btn_host), stringResource(R.string.host_explain), primary = true, enabled = !ui.cleaningUp, onClick = actions.onHost)
+        ChoiceButton(stringResource(R.string.btn_join), stringResource(R.string.join_explain), primary = false, enabled = !ui.cleaningUp, onClick = actions.onJoin)
+        if (!firstTime) SecondButton(stringResource(R.string.btn_cancel), onCancel)
         ui.ownName?.let { own ->
             var renaming by rememberSaveable { mutableStateOf(false) }
             TextButton(onClick = { renaming = true }) {
@@ -339,6 +378,26 @@ private fun ColumnScope.NewPhone(firstTime: Boolean, ui: LinkUiState, actions: C
                     onDone = { renaming = false; if (it != null) actions.onRenameThisPhone(it) },
                 )
             }
+        }
+    }
+}
+
+/** A big choice: a short title and one line saying what it does. */
+@Composable
+private fun ChoiceButton(title: String, explain: String, primary: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val threads = LocalThreads.current
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(20.dp),
+        color = if (primary) scheme.primary else Color.Transparent,
+        border = if (primary) null else BorderStroke(1.5.dp, threads.self),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = if (primary) scheme.onPrimary else scheme.onBackground)
+            Text(explain, style = MaterialTheme.typography.bodyMedium, color = if (primary) scheme.onPrimary else scheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
     }
 }
@@ -454,7 +513,7 @@ private fun ColumnScope.Discovering(state: LinkState.Discovering, waitingFor: St
             }
         },
     ) {
-        QuietButton(stringResource(R.string.btn_rescan), actions.onRescan)
+        SecondButton(stringResource(R.string.btn_rescan), actions.onRescan)
         OutlinedButton(onClick = actions.onDisconnect, shape = RoundedCornerShape(20.dp), colors = outlinedOnBackground(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             Text(stringResource(R.string.btn_cancel), style = MaterialTheme.typography.labelLarge)
         }
@@ -493,7 +552,7 @@ private fun ColumnScope.Pairing(state: LinkState.Pairing, actions: ConnectionAct
     ) {
         if (!state.waitingForPeer) {
             BigButton(stringResource(R.string.btn_codes_match), onClick = { actions.onPairingAnswer(true) })
-            QuietButton(stringResource(R.string.btn_codes_differ), { actions.onPairingAnswer(false) })
+            SecondButton(stringResource(R.string.btn_codes_differ), { actions.onPairingAnswer(false) })
         }
     }
 }
@@ -544,7 +603,7 @@ private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions
                     modifier = Modifier.weight(1f).heightIn(min = 60.dp),
                 ) { Text(stringResource(R.string.btn_push_to_talk), style = MaterialTheme.typography.labelLarge) }
             }
-            QuietButton(stringResource(R.string.btn_disconnect), actions.onDisconnect)
+            SecondButton(stringResource(R.string.btn_disconnect), actions.onDisconnect)
         }
     }
 }

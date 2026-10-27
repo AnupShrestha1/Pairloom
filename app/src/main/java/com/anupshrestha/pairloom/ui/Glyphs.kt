@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /** The few icons Pairloom needs, drawn as strokes so the app needs no icon library. */
-enum class Glyph { MIC, MIC_OFF, SPEAKER, EARPIECE, HANG_UP, CALL, INFO, CLOSE, BACK }
+enum class Glyph { MIC, MIC_OFF, SPEAKER, EARPIECE, HANG_UP, CALL, INFO, CLOSE, BACK, SETTINGS }
 
 /** Decorative: every icon sits next to (or inside) a control whose label says what it does. */
 @Composable
@@ -62,6 +62,16 @@ fun GlyphIcon(glyph: Glyph, tint: Color, modifier: Modifier = Modifier, size: Dp
                 drawCircle(tint, 9f * u, p(12f, 12f), style = line)
                 drawLine(tint, p(12f, 11f), p(12f, 16.5f), line.width, StrokeCap.Round)
                 drawCircle(tint, 1.2f * u, p(12f, 7.8f))
+            }
+            Glyph.SETTINGS -> {
+                // A gear: a ring with eight teeth and a hole.
+                drawCircle(tint, 6f * u, p(12f, 12f), style = line)
+                drawCircle(tint, 2.4f * u, p(12f, 12f), style = line)
+                for (i in 0 until 8) {
+                    rotate(i * 45f, pivot = p(12f, 12f)) {
+                        drawLine(tint, p(12f, 2.8f), p(12f, 5.6f), 2.6f * u, StrokeCap.Round)
+                    }
+                }
             }
             Glyph.CLOSE -> {
                 drawLine(tint, p(6f, 6f), p(18f, 18f), line.width, StrokeCap.Round)

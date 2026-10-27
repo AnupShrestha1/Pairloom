@@ -23,6 +23,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
@@ -114,24 +117,69 @@ fun LinkRings(
         } else {
             Stroke(stroke, cap = StrokeCap.Round)
         }
+        // Neon: a soft glow under each tube, stronger when linked and while that phone talks.
+        val base = when (mode) {
+            RingsMode.APART -> 0.35f
+            RingsMode.SEEKING -> 0.5f
+            RingsMode.JOINED -> 0.75f
+        }
+        neonGlow(left, r, stroke, threads.self, (base + 0.5f * selfPulse).coerceAtMost(1.2f), null)
+        neonGlow(right, r, stroke, threads.peer, (base + 0.5f * peerPulse).coerceAtMost(1.2f), if (mode == RingsMode.JOINED) null else dashFor(stroke, motion, dash))
         drawCircle(threads.self, r, left, style = Stroke(stroke))
         drawCircle(threads.peer, r, right, style = peerStyle)
+        // The bright core of a lit tube.
+        drawCircle(lighter(threads.self), r, left, style = Stroke(stroke * 0.28f))
+        if (mode == RingsMode.JOINED) drawCircle(lighter(threads.peer), r, right, style = Stroke(stroke * 0.28f))
 
         // Woven: where the rings cross at the top, this phone's thread passes over the other's.
         if (spread < 2f) {
             val dx = half
             val h = sqrt((r * r - dx * dx).coerceAtLeast(0f))
             val angle = Math.toDegrees(atan2(-h, dx).toDouble()).toFloat()
-            drawArc(
-                color = threads.self,
-                startAngle = angle - 14f,
-                sweepAngle = 28f,
-                useCenter = false,
-                topLeft = Offset(left.x - r, left.y - r),
-                size = Size(2 * r, 2 * r),
-                style = Stroke(stroke),
-            )
+            for ((color, width) in listOf(threads.self to stroke, lighter(threads.self) to stroke * 0.28f)) {
+                drawArc(
+                    color = color,
+                    startAngle = angle - 14f,
+                    sweepAngle = 28f,
+                    useCenter = false,
+                    topLeft = Offset(left.x - r, left.y - r),
+                    size = Size(2 * r, 2 * r),
+                    style = Stroke(width),
+                )
+            }
         }
+    }
+}
+
+/** The tube's colour blended halfway to white: the bright line along a lit neon tube. */
+private fun lighter(c: Color) = Color(
+    red = c.red + (1f - c.red) * 0.55f,
+    green = c.green + (1f - c.green) * 0.55f,
+    blue = c.blue + (1f - c.blue) * 0.55f,
+    alpha = 0.9f,
+)
+
+private fun dashFor(stroke: Float, motion: Boolean, dash: Float): android.graphics.PathEffect {
+    val on = stroke * 0.55f
+    val off = stroke * 0.65f
+    return android.graphics.DashPathEffect(floatArrayOf(on, off), if (motion) dash * (on + off) * 4 else 0f)
+}
+
+/**
+ * A blurred glow under a ring (Android 9+, where hardware drawing supports blur; older phones draw
+ * the rings without it). [amount] around 0.35 is a faint edge, 1 a clear neon glow.
+ */
+private fun DrawScope.neonGlow(center: Offset, r: Float, stroke: Float, color: Color, amount: Float, dash: android.graphics.PathEffect?) {
+    if (android.os.Build.VERSION.SDK_INT < 28 || amount <= 0f) return
+    drawIntoCanvas { canvas ->
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = stroke * 1.6f
+            this.color = color.copy(alpha = (0.55f * amount).coerceIn(0f, 1f)).toArgb()
+            maskFilter = android.graphics.BlurMaskFilter(stroke * 1.4f, android.graphics.BlurMaskFilter.Blur.NORMAL)
+            pathEffect = dash
+        }
+        canvas.nativeCanvas.drawCircle(center.x, center.y, r, paint)
     }
 }
 

@@ -33,7 +33,7 @@ Everything else stays quiet: one column, plain sentences, controls at the bottom
 ### Colour (own palette; dynamic colour off)
 | Name | Hex | Role |
 |---|---|---|
-| Indigo night | #16213E | dark background |
+| Pitch black | #000000 | dark background (true black: AMOLED pixels off, and the neon rings stand out; asked for by the user) |
 | Cool paper | #EEF1F5 | light background |
 | Thread teal | #1E9C96 | this phone's ring; primary actions (Connect, Call, Answer) |
 | Thread saffron | #F2A93B | the other phone's ring; "is talking" |
@@ -120,3 +120,20 @@ Fixed after the first screenshot review:
 
 Not checked yet (these are system settings for the user to switch, by hand): light mode, the
 largest font size, and TalkBack across the new screens.
+
+## Rework after the user's review (2026-10-27)
+The user found the first version confusing, with features hard to reach, and asked for a subtle
+neon look and a pure black background. Changes:
+- **Settings** replaces the (i) Details screen and is reached by a labelled "⚙ Settings" button.
+  Sections:
+  - This phone (name, Rename);
+  - Your phones (each with Rename and Forget, which asks for confirmation; Pair a new phone);
+  - Calls (the Opus switch, explained in plain words);
+  - troubleshooting information, folded away.
+- **Home** lists every other paired phone with its own Connect. "Pair a new phone", "Disconnect",
+  "Search again" and "The codes are different" are outlined buttons instead of faint text.
+- **Pairing a new phone** is back to **Host** and **Join**, each with one line saying what it does.
+- **Neon rings**: a blurred glow under each tube (Android 9+) and a bright core line. Faint when
+  apart, stronger when linked, strongest while that phone is talking.
+- **Pure black dark theme** (#000000; surfaces #111316 / #1B1E23): AMOLED pixels switch off, and
+  the neon reads better.
