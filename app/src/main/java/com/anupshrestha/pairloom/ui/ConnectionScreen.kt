@@ -781,11 +781,19 @@ private fun ColumnScope.PushToTalk(details: LinkDetails, actions: ConnectionActi
     val group = details.group?.takeIf { it.inTalk }
     val talker = group?.floorHolder?.takeUnless { group.floorIsMine } ?: details.peerName
     val busy = talking && group != null && group.floorHolder != null && !group.floorIsMine
+    // A press that started while someone else had the floor stays unheard until it is let go,
+    // even once the floor is free (the hub's rule), so the screen keeps saying so.
+    var shutOutThisPress by remember { mutableStateOf(false) }
+    LaunchedEffect(talking, busy) { if (!talking) shutOutThisPress = false else if (busy) shutOutThisPress = true }
+    val unheard = busy || (talking && shutOutThisPress)
     val status = when {
         busy -> stringResource(R.string.group_busy, talker)
-        talking && peerTalking -> stringResource(R.string.ptt_both_talking, talker)
+        unheard -> stringResource(R.string.group_press_again)
+        group != null && talking -> stringResource(R.string.ptt_you_talking)
+        group != null && peerTalking -> stringResource(R.string.group_peer_talking, talker)
+        talking && peerTalking -> stringResource(R.string.ptt_both_talking)
         talking -> stringResource(R.string.ptt_you_talking)
-        peerTalking -> stringResource(R.string.ptt_peer_talking, talker)
+        peerTalking -> stringResource(R.string.ptt_peer_talking)
         else -> stringResource(R.string.ptt_quiet)
     }
     Stage(
@@ -794,7 +802,7 @@ private fun ColumnScope.PushToTalk(details: LinkDetails, actions: ConnectionActi
         status = status,
         statusColor = if (peerTalking) threads.peerText else MaterialTheme.colorScheme.onSurfaceVariant,
         peerLevel = if (peerTalking) maxOf(s?.peerLevel ?: 0f, 0.35f) else 0f,
-        selfTalking = talking,
+        selfTalking = talking && !unheard,
         content = { routeName(details.audioRoute)?.let { Body(it) } },
     ) {
         val idleText = stringResource(if (tapMode) R.string.ptt_tap else R.string.ptt_hold)

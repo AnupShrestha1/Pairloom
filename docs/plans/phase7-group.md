@@ -38,7 +38,13 @@ The code assumes one other phone throughout:
   a loopback socket, so the relay has no special case for the host.
 
 ### Control protocol (version 7) additions
-GROUP_ROSTER (members' names and ids), FLOOR (holder id or none), and a group kind for MEDIA_OFFER.
+- GROUP_JOIN (member to host: codecs, UDP port, key) and GROUP_WELCOME (host to member: the
+  group's codec, the member's id, the hub's port and key). Like MEDIA_OFFER and MEDIA_ANSWER, but
+  each member joins or leaves on its own; nobody has to accept anyone else.
+- GROUP_LEAVE (either way: left, not admitted, or ended).
+- GROUP_ROSTER (every phone on the link, who is in the talk, and which entry is the receiver).
+- FLOOR (holder id or none).
+- Frames may now be up to 1024 bytes, so a full roster of 12 long names fits.
 
 ### Simulating a third phone (only two real phones exist)
 1. **On the computer, in tests**: the hub and several members as real UDP and TLS endpoints on
@@ -86,3 +92,45 @@ GROUP_ROSTER (members' names and ids), FLOOR (holder id or none), and a group ki
 - Full suite: 121 tests, passing on three runs in a row.
 - Not covered on the computer: Opus across talkers (one decoder fed by two encoders in turn), which
   the device checks will listen for.
+
+## G2 results (2026-10-27)
+- **Protocol 7** (`ControlProtocol`): the five group messages above. Phones on protocol 6 cannot
+  link with 7, as with every earlier version change.
+- **`media/GroupTalk.kt`**:
+  - `GroupHost` (hosting phone): the roster, joins and leaves, the group codec, and the hub's
+    lifetime;
+  - `GroupMemberLink` (every phone): joins, runs the push-to-talk session, and keeps the roster
+    and floor;
+  - `InProcessLink`: the hosting phone's own user joins its hub this way. The virtual phone (G3)
+    will use it too.
+- **Hosting several phones** (`LinkViewModel`): after the first link the hosting phone keeps
+  listening. Each later phone gets its own TLS control link and becomes a group member, but only
+  if it is already paired: `SessionNegotiator` can now refuse to pair, so a stranger is turned away
+  without a code prompt.
+- **App**: Linked shows **Group talk**, or **Join group talk (n in it)** when others are in it.
+  The push-to-talk screen then reads "Group talk":
+  - "Galaxy is talking";
+  - pressing while someone else has the floor shows "Redmi has the floor. Let go and try again.";
+  - if they let go first, the screen keeps saying "Not heard. Let go and press again to talk."
+  A 1:1 call offered while a phone is in the group talk is declined automatically (one
+  microphone).
+- **Tests**: 127 (protocol round trips and malformed frames, three in-process members over
+  loopback, the codec rule, a member that vanishes, an unpaired phone turned away).
+- **On both phones** (the Redmi hosted, the A03s joined):
+  - both joined the group talk and took turns over Wi-Fi Direct, Opus, both directions;
+  - packets lost: A03s 0-2 of about 1,500, Redmi 0;
+  - concealed: 3 % (A03s) and 0.5-1 % (Redmi);
+  - estimated one-way delay: about 190-210 ms;
+  - the busy messages and the hand-over showed as intended, with no crash.
+- **Fixed: Disconnect after a group talk looked like a dropped link.** The extra closing work
+  let the Wi-Fi Direct group go before the goodbye, so the other phone started reconnecting. Now
+  the goodbyes go out first and the group is removed after everything has closed. Checked: the
+  other phone saw "disconnected" in both linked runs (it had seen a dropped link before the fix).
+
+Still open:
+- If the first phone leaves, the hosting phone ends the whole link, extra members included. The
+  group should stay up while anyone is left.
+- Home's Connect picks roles by key. A third phone whose key is lower than the host's would try
+  to host instead of joining, so joining an existing group needs its own button (G4).
+- Several real phones in one Wi-Fi Direct group are untested (only two phones are available). The
+  virtual phone covers the relay path on the host.

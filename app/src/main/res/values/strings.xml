@@ -258,4 +258,6 @@
     </plurals>
     <string name="group_talk_title">Group talk</string>
     <string name="group_busy">%1$s has the floor. Let go and try again.</string>
+    <string name="group_peer_talking">%1$s is talking</string>
+    <string name="group_press_again">Not heard. Let go and press again to talk.</string>
 </resources>

@@ -1619,23 +1619,29 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
         // Closing may write (the BYE), so it happens off the main thread. The registry is marked
         // closed at once, so any socket a background thread opens from now on is closed on the spot.
+        // The goodbyes go first and the Wi-Fi Direct group is removed only after all of this, so the
+        // other phones see "disconnected" rather than a dropped link (which they would try to
+        // bring back).
+        if (c != null) _ui.update { it.copy(cleaningUp = true) }
         thread(isDaemon = true, name = "pairloom-close") {
-            m?.let { runCatching { it.close() } }
-            if (ownLink != null) runCatching { ownLink.close() } else g?.let { runCatching { it.close() } }
+            // The host side first: it sends nothing more, so no roster goes to phones already closing.
             gh?.let { runCatching { it.close() } }
             extras.forEach { it.close(sendBye) }
             ch?.close(sendBye)
+            m?.let { runCatching { it.close() } }
+            if (ownLink != null) runCatching { ownLink.close() } else g?.let { runCatching { it.close() } }
             registry.closeAll()
+            if (c != null) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    c.shutdown {
+                        log("Wi-Fi Direct cleanup finished")
+                        _ui.update { it.copy(cleaningUp = false) }
+                    }
+                }
+            }
         }
         if (finalState != null) setLink(finalState)
         if (droppedPeer != null) startReconnecting(droppedPeer)
-        if (c != null) {
-            _ui.update { it.copy(cleaningUp = true) }
-            c.shutdown {
-                log("Wi-Fi Direct cleanup finished")
-                _ui.update { it.copy(cleaningUp = false) }
-            }
-        }
     }
 
     // ---- Helpers -----------------------------------------------------------------------------
