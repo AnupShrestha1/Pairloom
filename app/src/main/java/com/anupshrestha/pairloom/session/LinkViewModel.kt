@@ -98,6 +98,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val appVisible = MutableStateFlow(true)
 
+    /** Chosen names (this phone's, nicknames for paired phones). Declared before init, which reads it. */
+    private val names = NameStore(application)
+
     // Written on the main thread; generation and linkedAtMs are also read from IO threads.
     @Volatile private var generation = 0
 
@@ -170,7 +173,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             }
             loaded.onSuccess {
                 security = it
-                _ui.update { s -> s.copy(ownKey = Fingerprints.short(it.identity.fingerprintHex)) }
+                _ui.update { s -> s.copy(ownKey = Fingerprints.short(it.identity.fingerprintHex), ownName = names.ownName) }
                 log("Identity ready: key ${Fingerprints.short(it.identity.fingerprintHex)}")
                 refreshPaired()
             }.onFailure {
@@ -728,7 +731,13 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 // Faster while push-to-talk runs, so the "talking" indicator follows the voice.
-                delay(if (m?.kind == MediaKind.PTT) PTT_POLL_MS else MEDIA_POLL_MS)
+                delay(
+                    when (m?.kind) {
+                        MediaKind.PTT -> PTT_POLL_MS
+                        MediaKind.VOICE -> CALL_POLL_MS // the voice pulse and the timer
+                        else -> MEDIA_POLL_MS
+                    },
+                )
             }
         }
     }
@@ -739,6 +748,27 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         pendingPairing = null
         log(if (codesMatch) "You confirmed the codes match" else "You said the codes do not match")
         pending.complete(codesMatch)
+    }
+
+    /** This phone's name, as the other phone will see it. */
+    fun renameThisPhone(name: String) {
+        names.ownName = name
+        log("This phone is now called ${names.ownName}")
+        _ui.update { it.copy(ownName = names.ownName) }
+    }
+
+    /** A local nickname for a paired phone; blank goes back to the name it sends. */
+    fun renamePaired(fingerprintHex: String, name: String) {
+        names.setNickname(fingerprintHex, name)
+        refreshPaired()
+        // Also on the screen of a running link.
+        val nick = names.nickname(fingerprintHex)
+        if (linkedPeerFingerprint == fingerprintHex) {
+            _ui.update { s ->
+                val l = s.link
+                if (l is LinkState.Linked && nick != null) s.copy(link = l.copy(details = l.details.copy(peerName = nick))) else s
+            }
+        }
     }
 
     /** Removes a paired phone. Only allowed while no session is running. */
@@ -774,7 +804,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                         pairedDevices = devices.sortedByDescending { it.pairedAtMs }
                             .map {
                                 PairedDeviceUi(
-                                    it.name, it.fingerprintHex, Fingerprints.short(it.fingerprintHex), it.pairedAtMs,
+                                    names.nickname(it.fingerprintHex) ?: it.name, it.fingerprintHex, Fingerprints.short(it.fingerprintHex), it.pairedAtMs,
                                     canJoinDirectly = it.groupName != null && Build.VERSION.SDK_INT >= 29,
                                 )
                             },
@@ -1212,7 +1242,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         log("TLS ${tls.protocol} ${tls.cipherSuite}; peer key ${Fingerprints.short(tls.peerFingerprint.toHex())}")
         val ch = ControlChannel(tls.socket) { log(it) }
         try {
-            val negotiator = SessionNegotiator(sec.identity.fingerprint, sec.installId, Build.MODEL, sec.store, { log(it) })
+            val negotiator = SessionNegotiator(sec.identity.fingerprint, sec.installId, names.ownName, sec.store, { log(it) })
             val peer = negotiator.negotiate(ch, isServer, tls.peerFingerprint, PromptFor(gen))
             return Established(ch, peer, tls.protocol, tls.cipherSuite, socket.localAddress, socket.inetAddress)
         } catch (e: Throwable) {
@@ -1257,8 +1287,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun onLinked(established: Established, isGroupOwner: Boolean, ownerAddress: String?) {
         val ch = established.channel
-        val peerName = established.peer.name
+        // A nickname the user gave this phone wins over the name it sends.
+        val peerName = names.nickname(established.peer.fingerprintHex) ?: established.peer.name
         channel = ch
+        // Keep the stored name current if the other phone was renamed (shown when not linked).
+        security?.let { sec ->
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { if (sec.store.updateName(established.peer.fingerprintHex, established.peer.name)) refreshPaired() }
+            }
+        }
         linkedAtMs = SystemClock.elapsedRealtime()
         timeoutJob?.cancel()
         val details = LinkDetails(
@@ -1533,6 +1570,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val ADDRESS_POLL_MS = 100L
         const val MEDIA_POLL_MS = 500L
         const val PTT_POLL_MS = 100L
+        const val CALL_POLL_MS = 200L
         const val DIRECT_RETRY_MS = 5_000L
         const val RECONNECT_WINDOW_MS = 90_000L
 

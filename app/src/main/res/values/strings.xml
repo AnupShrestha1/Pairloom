@@ -3,8 +3,8 @@
     <string name="home_tagline">Local voice intercom for two phones</string>
 
     <!-- Buttons -->
-    <string name="btn_host">Host</string>
-    <string name="btn_join">Join</string>
+    <string name="btn_host">Wait for the other phone</string>
+    <string name="btn_join">Find the other phone</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_disconnect">Disconnect</string>
     <string name="btn_rescan">Rescan</string>
@@ -30,13 +30,13 @@
     <!-- Hosting -->
     <string name="status_hosting_starting">Creating the Wi-Fi Direct group…</string>
     <string name="status_hosting_ready">Waiting for the other phone</string>
-    <string name="hosting_ready_body">The group is ready. On the other phone tap Join and choose this phone, then accept the connection prompt on this phone if it appears.</string>
+    <string name="hosting_ready_body">On the other phone, tap Find the other phone and pick this one. Accept the connection prompt here if one appears.</string>
     <string name="hosting_network_name">Group name: %1$s</string>
 
     <!-- Discovering -->
     <string name="status_discovering">Looking for nearby phones</string>
     <string name="discovering_body">Make sure the other phone is on Host, then tap it below.</string>
-    <string name="discovering_none">No devices found yet. Check that the other phone is hosting and that Wi-Fi is on, then tap Rescan.</string>
+    <string name="discovering_none">Nothing found yet. Check that the other phone is waiting and that Wi-Fi is on, then tap Search again.</string>
     <string name="peer_type_phone">Phone</string>
     <string name="peer_type_other">Other device</string>
     <string name="peer_status_available">available</string>
@@ -47,7 +47,7 @@
 
     <!-- Connecting -->
     <string name="status_connecting">Connecting to %1$s</string>
-    <string name="connecting_body">The other phone may ask you to accept the connection. Tap Accept there.</string>
+    <string name="connecting_body">If the other phone asks whether to accept the connection, tap Accept there.</string>
     <string name="status_opening">Opening the link</string>
     <string name="opening_body">The Wi-Fi Direct group is formed. Starting the control connection.</string>
 
@@ -56,9 +56,9 @@
     <string name="pairing_body">The phones have not been paired before. Check that both phones show the same code.</string>
     <string name="pairing_code_label">Pairing code</string>
     <string name="pairing_question">Does the other phone show exactly this code?</string>
-    <string name="pairing_waiting">Waiting for the other phone to confirm…</string>
-    <string name="btn_codes_match">Codes match</string>
-    <string name="btn_codes_differ">Codes don\'t match</string>
+    <string name="pairing_waiting">Waiting for %1$s to check…</string>
+    <string name="btn_codes_match">Both show this code</string>
+    <string name="btn_codes_differ">The codes are different</string>
 
     <!-- Paired phones -->
     <string name="paired_title">Paired phones</string>
@@ -82,7 +82,7 @@
 
     <!-- Calls -->
     <string name="btn_call">Call</string>
-    <string name="btn_accept_call">Accept</string>
+    <string name="btn_accept_call">Answer</string>
     <string name="btn_decline_call">Decline</string>
     <string name="btn_end_call">End call</string>
     <string name="btn_mute">Mute</string>
@@ -106,8 +106,8 @@
     <string name="ptt_tap_mode">Tap to talk (instead of holding)</string>
     <string name="ptt_tap_mode_talkback">Tap to talk is on while TalkBack is running</string>
     <string name="ptt_you_talking">You are talking</string>
-    <string name="ptt_peer_talking">%1$s is talking</string>
-    <string name="ptt_both_talking">You and %1$s are both talking</string>
+    <string name="ptt_peer_talking">is talking</string>
+    <string name="ptt_both_talking">You are both talking</string>
     <string name="ptt_quiet">Nobody is talking</string>
     <string name="channel_ongoing">Link and calls</string>
     <string name="channel_ongoing_description">Shown while Pairloom is connected to another phone, so calls can go on in the background.</string>
@@ -195,4 +195,40 @@
     <!-- Log -->
     <string name="log_title">Event log</string>
     <string name="log_empty">Nothing yet.</string>
+    <string name="details_title">Details</string>
+    <string name="details_link">Link</string>
+    <string name="btn_back">Back</string>
+    <string name="status_not_connected">Not connected</string>
+    <string name="home_hint">Tap Connect on both phones, in any order.</string>
+    <string name="home_hint_first">Tap Connect on both phones. This first time, %1$s may show a list of nearby phones: pick this one there.</string>
+    <string name="btn_try_again">Try again</string>
+    <string name="btn_pair_new">Pair a new phone</string>
+    <string name="switch_to">Use %1$s instead</string>
+    <string name="new_title_first">Connect two phones</string>
+    <string name="new_body">Open Pairloom on both phones. On one, tap Wait for the other phone; on the other, tap Find the other phone.</string>
+    <string name="status_waiting">Waiting…</string>
+    <string name="status_connecting_short">Connecting…</string>
+    <string name="discover_title">Find the other phone</string>
+    <string name="discover_looking">Looking for nearby phones…</string>
+    <string name="discover_pick">Tap the other phone</string>
+    <string name="status_reconnecting">Reconnecting…</string>
+    <string name="pairing_check_title">Check the code</string>
+    <string name="pairing_check_status">Is this the same number as on %1$s?</string>
+    <string name="incoming_call_status">is calling</string>
+    <string name="incoming_ptt_status">wants to use push-to-talk</string>
+    <string name="calling_status">Calling…</string>
+    <string name="status_connected">Connected</string>
+    <string name="btn_speaker_short">Speaker</string>
+    <string name="route_earpiece_title">On the earpiece</string>
+    <string name="route_speaker_title">On the loudspeaker</string>
+    <string name="route_headset_title">On the headset</string>
+    <string name="btn_end_ptt_short">End</string>
+    <string name="new_status">You only do this once</string>
+    <string name="this_phone_title">This phone</string>
+    <string name="this_phone_is_called">This phone is called %1$s. Rename</string>
+    <string name="rename_this_phone">Name this phone</string>
+    <string name="rename_paired">Rename %1$s</string>
+    <string name="rename_paired_hint">Only on this phone. Leave it empty to use the name the other phone sends.</string>
+    <string name="btn_rename">Rename</string>
+    <string name="btn_save">Save</string>
 </resources>

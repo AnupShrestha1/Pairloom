@@ -63,6 +63,15 @@ class PairedDeviceStore(private val file: File) {
         true
     }
 
+    /** Updates the name the paired phone sends (after it was renamed); returns true if it changed. */
+    fun updateName(fingerprintHex: String, name: String): Boolean = synchronized(lock) {
+        val all = load()
+        val current = all.firstOrNull { it.fingerprintHex == fingerprintHex } ?: return false
+        if (current.name == name || name.isBlank()) return false
+        write(all.map { if (it === current) it.copy(name = name) else it })
+        true
+    }
+
     /** Removes the phone with [fingerprintHex]; returns false if it was not stored. */
     fun remove(fingerprintHex: String): Boolean = synchronized(lock) {
         val all = load()

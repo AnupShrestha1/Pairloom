@@ -80,6 +80,8 @@ class MainActivity : ComponentActivity() {
             onJoinPaired = viewModel::joinPaired,
             onConnectPaired = { fp -> requestThen { viewModel.connectPaired(fp) } },
             onConnectAuto = { fp -> requestThen { viewModel.connectAuto(fp) } },
+            onRenameThisPhone = viewModel::renameThisPhone,
+            onRenamePaired = viewModel::renamePaired,
         )
         handleAnswer(intent)
         setContent {

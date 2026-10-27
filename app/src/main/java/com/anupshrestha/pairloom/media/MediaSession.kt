@@ -53,6 +53,8 @@ data class MediaStats(
      * push-to-talk silence), or since the start if none came yet.
      */
     val silentMs: Long = 0,
+    /** Loudness of the other phone's voice as played here, 0..1 (smoothed); drives the UI's pulse. */
+    val peerLevel: Float = 0f,
 ) {
     /** Nothing has arrived for a second: the link is probably failing. */
     val signalLost: Boolean get() = silentMs >= SIGNAL_LOST_MS
@@ -122,6 +124,19 @@ class MediaSession(
     @Volatile private var sendingSpurt = false
     @Volatile private var lastPeerFrameNanos = 0L
     @Volatile private var lastRxNanos = 0L
+    @Volatile private var peerLevel = 0f
+
+    /** Smoothed RMS of a played 16-bit frame: rises fast, falls over about 200 ms. */
+    private fun trackLevel(frame: ByteArray) {
+        var sum = 0.0
+        val n = frame.size / 2
+        for (i in 0 until n) {
+            val v = ((frame[2 * i].toInt() and 0xFF) or (frame[2 * i + 1].toInt() shl 8)).toShort().toDouble()
+            sum += v * v
+        }
+        val level = (kotlin.math.sqrt(sum / maxOf(n, 1)) / 6000.0).coerceIn(0.0, 1.0).toFloat()
+        peerLevel = if (level > peerLevel) level else peerLevel * 0.95f + level * 0.05f
+    }
 
     private val sealer = MediaSealer(sendKey)
     private val opener = MediaOpener(receiveKey)
@@ -216,6 +231,7 @@ class MediaSession(
             codec = codec,
             codecDelayMs = encoder.delayMs,
             decodeDelayMs = if (decodeCount == 0) 0.0 else decodeNanos / 1e6 / decodeCount,
+            peerLevel = peerLevel,
             silentMs = if (startNanos == 0L) 0 else (System.nanoTime() - maxOf(lastRxNanos, startNanos)) / 1_000_000,
         )
     }
@@ -439,10 +455,12 @@ class MediaSession(
             if (!running) break
             tick++
             val out = synchronized(lock) { buffer.pop() }
+            if (out !is Playout.Frame) peerLevel *= 0.9f // silence or concealment: let the pulse fade
             val frame = when (out) {
                 Playout.Buffering -> silence
                 is Playout.Frame -> {
                     played.incrementAndGet()
+                    trackLevel(out.payload)
                     lastPeerFrameNanos = System.nanoTime()
                     concealer.good(out.payload)
                     verify?.let { if (out.payload.contentEquals(it.frame(out.index))) intact.incrementAndGet() else corrupted.incrementAndGet() }
