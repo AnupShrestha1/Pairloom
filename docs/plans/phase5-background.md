@@ -86,11 +86,15 @@ itself. Same scope otherwise: two phones, Wi-Fi Direct, no internet.
 | Screen on (background) | 2.4-2.7 % | 230-270 ms |
 | Screen off, Wi-Fi locks only | 9-14 % | 250-460 ms |
 | Screen off, plus a partial CPU wake lock | 6-8.6 % | 270-450 ms |
+| Screen off, wake lock, **Opus** | 1.3-1.7 % | 325-360 ms |
 
 The wake lock removed the speaker underrun the Redmi had right after its screen went off. What
 remains is most likely Wi-Fi power saving: from Android 14 an app can only turn it off while it is
 in front with the screen on. Calls with the screen off work but sound rougher. This is a known
-limit; Opus at a lower packet rate is an option to try later.
+limit. Opus helps a lot: it sends half as many packets (20 ms each) at a 24th of the data. With
+the screen off it concealed 1.3-1.7 % instead of 6-8.6 %, at a slightly higher delay. Opus is
+therefore the default for voice again, and PCM stays available under "Show details". This rests
+on one 60-80 s run per setting on these two phones.
 
 ### B2: verified
 - An incoming call while Pairloom is not on screen shows a call-style notification

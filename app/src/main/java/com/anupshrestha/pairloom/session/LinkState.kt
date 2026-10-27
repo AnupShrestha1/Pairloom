@@ -197,7 +197,7 @@ data class LinkUiState(
     /** The paired phone a home-screen Connect is waiting for (until the link ends). */
     val waitingFor: String? = null,
     /** Diagnostics: whether this phone offers Opus for voice. */
-    val opusEnabled: Boolean = false,
+    val opusEnabled: Boolean = true,
 )
 
 /**
