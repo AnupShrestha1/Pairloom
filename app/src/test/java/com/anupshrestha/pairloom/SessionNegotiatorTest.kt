@@ -82,10 +82,11 @@ class SessionNegotiatorTest {
     /** Runs both sides; each result is the peer or the failure. */
     private fun run(
         server: Phone, client: Phone, serverPrompt: PairingPrompt, clientPrompt: PairingPrompt, confirmTimeoutMs: Long = 5_000,
+        serverAllowsPairing: Boolean = true,
     ): Pair<Result<SessionPeer>, Result<SessionPeer>> = runBlocking {
         val (sc, cc) = channels()
         withTimeout(20_000) {
-            val s = async(Dispatchers.IO) { runCatching { negotiator(server, confirmTimeoutMs).negotiate(sc, true, client.fingerprint, serverPrompt) } }
+            val s = async(Dispatchers.IO) { runCatching { negotiator(server, confirmTimeoutMs).negotiate(sc, true, client.fingerprint, serverPrompt, serverAllowsPairing) }.onFailure { sc.close() } }
             val c = async(Dispatchers.IO) { runCatching { negotiator(client, confirmTimeoutMs).negotiate(cc, false, server.fingerprint, clientPrompt) } }
             s.await() to c.await()
         }
@@ -118,6 +119,21 @@ class SessionNegotiatorTest {
         assertFalse(rb.getOrThrow().newlyPaired)
         assertEquals(null, pa.shown)
         assertEquals(null, pb.shown)
+    }
+
+    @Test
+    fun aGroupHostTurnsAwayAPhoneThatIsNotPairedYetWithoutPrompting() {
+        val a = phone("A"); val b = phone("B")
+        val pa = Prompt(true); val pb = Prompt(true)
+        val (ra, rb) = run(a, b, pa, pb, serverAllowsPairing = false)
+        assertEquals(FailureKind.PAIRING_REJECTED, kind(ra))
+        assertTrue(rb.isFailure)
+        assertEquals(null, pa.shown)
+        assertTrue(a.store.load().isEmpty() && b.store.load().isEmpty())
+        // Once paired, the same phone gets through.
+        run(a, b, Prompt(true), Prompt(true))
+        val (ra2, rb2) = run(a, b, Prompt(null), Prompt(null), serverAllowsPairing = false)
+        assertTrue(ra2.isSuccess && rb2.isSuccess)
     }
 
     @Test

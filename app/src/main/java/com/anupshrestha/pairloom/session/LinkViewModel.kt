@@ -26,6 +26,9 @@ import com.anupshrestha.pairloom.media.MediaNegotiation
 import com.anupshrestha.pairloom.media.MicrophoneSource
 import com.anupshrestha.pairloom.media.SpeakerSink
 import com.anupshrestha.pairloom.media.MediaSession
+import com.anupshrestha.pairloom.media.GroupHost
+import com.anupshrestha.pairloom.media.GroupMemberLink
+import com.anupshrestha.pairloom.media.InProcessLink
 import com.anupshrestha.pairloom.net.ControlChannel
 import com.anupshrestha.pairloom.net.ControlProtocol
 import com.anupshrestha.pairloom.net.LinkEndpoint
@@ -49,6 +52,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -66,6 +70,7 @@ import java.io.File
 import java.io.IOException
 import java.net.DatagramSocket
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -533,6 +538,25 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var media: MediaNegotiation? = null
     private var mediaPollJob: Job? = null
 
+    // Group talk (Phase 7). On the hosting phone: the host side and its own user's in-process
+    // membership; on a member phone: its membership of the host's talk.
+    @Volatile private var groupHost: GroupHost? = null
+    @Volatile private var ownGroupLink: InProcessLink? = null
+    @Volatile private var group: GroupMemberLink? = null
+    @Volatile private var primaryMemberId: Int? = null
+
+    /** Hosting phone: control links to the phones that joined after the first, by member id. */
+    private val extraMembers = java.util.concurrent.ConcurrentHashMap<Int, ControlChannel>()
+
+    /** Joins the group talk. The activity has already made sure RECORD_AUDIO is granted. */
+    fun startGroupTalk() {
+        val g = group ?: return
+        if (_ui.value.link !is LinkState.Linked || media?.isBusy == true) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { g.join() }.onFailure { log("Could not join the group talk: ${it.message}") }
+        }
+    }
+
     /** Starts the test-tone media session with the linked phone. */
     fun startTestTone() = startMedia(MediaKind.TONE)
 
@@ -544,6 +568,11 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Push-to-talk: the user pressed (true) or released (false) the talk button. */
     fun setTalking(talking: Boolean) {
+        group?.takeIf { it.session != null }?.let { g ->
+            if (g.talking != talking) log(if (talking) "Talk button pressed (group)" else "Talk button released (group)")
+            g.talking = talking
+            return
+        }
         val s = media?.session ?: return
         if (media?.kind != MediaKind.PTT) return
         if (s.talking != talking) log(if (talking) "Talk button pressed" else "Talk button released")
@@ -552,7 +581,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startMedia(kind: MediaKind) {
         val m = media ?: return
-        if (_ui.value.link !is LinkState.Linked) return
+        if (_ui.value.link !is LinkState.Linked || group?.isBusy == true) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { m.start(kind) }.onFailure { log("Could not start ($kind): ${it.message}") }
         }
@@ -562,6 +591,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     fun stopMedia() = stopMedia(MediaEnd.ENDED_HERE)
 
     private fun stopMedia(reason: MediaEnd) {
+        group?.takeIf { it.isBusy }?.let { g ->
+            viewModelScope.launch(Dispatchers.IO) { runCatching { g.leave(reason) } }
+            return
+        }
         val m = media ?: return
         viewModelScope.launch(Dispatchers.IO) { runCatching { m.stop(reason) } }
     }
@@ -677,11 +710,77 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         return session
     }
 
+    private fun groupCodecs() = if (opusEnabled && opusAvailable) AudioCodec.OPUS.bit else 0
+
+    private fun newGroupMember(local: InetAddress, hostAddress: InetAddress, send: (ControlProtocol.Message) -> Unit) = GroupMemberLink(
+        local, hostAddress, send,
+        newSession = { codec, s, p, out, input -> newMediaSession(MediaKind.PTT, codec, s, p, out, input) },
+        localCodecs = ::groupCodecs,
+        log = { log(it) },
+        onEnded = { reason ->
+            log("Group talk ended: $reason")
+            lastEnd = MediaKind.PTT to reason
+        },
+    )
+
+    /**
+     * Group talk for this link. The hosting phone runs the host side and joins it in-process like
+     * any other member; the phone it linked with first becomes a member, and so does every paired
+     * phone that connects later ([acceptMembers]).
+     */
+    private fun setUpGroup(isGroupOwner: Boolean, local: InetAddress, remote: InetAddress, ch: ControlChannel, peerName: String) {
+        if (!isGroupOwner) {
+            group = newGroupMember(local, remote) { ch.sendMessage(it) }
+            return
+        }
+        val host = GroupHost(
+            local,
+            localCodecs = ::groupCodecs,
+            threadSetup = { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) },
+            log = { log(it) },
+        )
+        groupHost = host
+        val own = InProcessLink(host, names.ownName, local) { send -> newGroupMember(local, local, send) }
+        ownGroupLink = own
+        group = own.member
+        primaryMemberId = host.link(peerName, remote) { ch.sendMessage(it) }
+    }
+
+    private fun groupDetails(g: GroupMemberLink): GroupDetails? {
+        val roster = g.roster
+        if (roster.isEmpty()) return null
+        val me = g.ownId
+        val holder = g.floorHolder
+        return GroupDetails(
+            members = roster.map { GroupMemberUi(it.name, it.inTalk, it.id == me) },
+            inTalk = g.isBusy,
+            joining = g.isJoining,
+            floorHolder = holder?.let { h -> roster.firstOrNull { it.id == h }?.name },
+            floorIsMine = holder != null && holder == me,
+        )
+    }
+
     /** Media-control messages arrive on the control channel's read thread. */
     private fun onMediaMessage(message: ControlProtocol.Message, gen: Int) {
         if (gen != generation) return
         if (message is ControlProtocol.Message.GroupInfo) {
             onGroupInfo(message)
+            return
+        }
+        if (message is ControlProtocol.Message.GroupJoin || message is ControlProtocol.Message.GroupWelcome ||
+            message is ControlProtocol.Message.GroupLeave || message is ControlProtocol.Message.GroupRoster ||
+            message is ControlProtocol.Message.Floor
+        ) {
+            val host = groupHost
+            val id = primaryMemberId
+            runCatching { if (host != null) id?.let { host.onMessage(it, message) } else group?.onMessage(message) }
+                .onFailure { log("Group message failed: ${it.message}") }
+            return
+        }
+        if (message is ControlProtocol.Message.MediaOffer && group?.isBusy == true) {
+            // One microphone: a call cannot start while this phone is in the group talk.
+            log("Declined the other phone's call: this phone is in the group talk")
+            runCatching { channel?.sendMessage(ControlProtocol.Message.MediaStop) }
             return
         }
         runCatching { media?.onMessage(message) }.onFailure { log("Media message failed: ${it.message}") }
@@ -702,12 +801,21 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         mediaPollJob = viewModelScope.launch {
             while (gen == generation) {
                 val m = media
-                val stats = m?.session?.stats()
+                val g = group
+                val groupStats = g?.session?.stats()
+                val stats = m?.session?.stats() ?: groupStats
+                val kind = when {
+                    m?.session != null -> m.kind
+                    groupStats != null -> MediaKind.PTT
+                    else -> null
+                }
                 val offering = m?.isOffering == true
                 val incoming = m?.incomingKind
-                holdWifiLock(m?.isBusy == true)
-                if (m?.isBusy == true) lastEnd = null
+                val busy = m?.isBusy == true || g?.isBusy == true
+                holdWifiLock(busy)
+                if (busy) lastEnd = null
                 val end = lastEnd
+                val groupNow = g?.let(::groupDetails)
                 _ui.update { s ->
                     val l = s.link
                     if (l is LinkState.Linked) {
@@ -717,7 +825,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                                     media = stats,
                                     mediaActive = stats != null,
                                     mediaOffering = offering,
-                                    mediaKind = if (stats != null) m.kind else null,
+                                    mediaKind = if (stats != null) kind else null,
                                     incomingCall = incoming?.needsAccept == true,
                                     incomingKind = incoming,
                                     muted = callMuted,
@@ -725,6 +833,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                                     audioRoute = if (stats != null) activeCallAudio?.route else null,
                                     lastEndKind = end?.first,
                                     lastEnd = end?.second,
+                                    group = groupNow,
                                 ),
                             ),
                         )
@@ -734,7 +843,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Faster while push-to-talk runs, so the "talking" indicator follows the voice.
                 delay(
-                    when (m?.kind) {
+                    when (kind ?: m?.kind) {
                         MediaKind.PTT -> PTT_POLL_MS
                         MediaKind.VOICE -> CALL_POLL_MS // the voice pulse and the timer
                         else -> MEDIA_POLL_MS
@@ -1066,6 +1175,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         socketJob = viewModelScope.launch(Dispatchers.IO) {
             var ch: ControlChannel? = null
             var handedOver = false
+            var server: ServerSocket? = null
             try {
                 val endpoint = awaitEndpoint(interfaceName)
                     ?: throw LinkUnverifiedException("$interfaceName has no IPv4 address after ${ADDRESS_WAIT_MS / 1000} s")
@@ -1073,7 +1183,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 log("Wi-Fi Direct endpoint: $endpoint")
                 val established = if (isGroupOwner) {
                     LinkEndpoint.checkHostAddress(endpoint, ownerAddress)?.let { throw LinkUnverifiedException(it) }
-                    acceptPeer(endpoint, registry, gen)
+                    val listening = openServer(endpoint, registry).also { server = it }
+                    acceptPeer(listening, endpoint, registry, gen, allowPairing = true)
                 } else {
                     val target = LinkEndpoint.parseIpv4(ownerAddress)
                         ?: throw LinkUnverifiedException("the group owner address is unknown")
@@ -1090,6 +1201,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 if (!handedOver) return@launch
+                // The hosting phone keeps listening: more paired phones may join the group talk.
+                server?.let { s -> launch { acceptMembers(s, endpoint, registry, gen) } }
                 val exit = opened.run(onStats = { stats -> onStats(stats, gen) }, onMedia = { m -> onMediaMessage(m, gen) })
                 withContext(Dispatchers.Main) { if (gen == generation) onChannelEnded(exit) }
             } catch (e: CancellationException) {
@@ -1106,65 +1219,120 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 // Covers failure and cancellation alike: a channel no session adopted is closed here.
-                if (!handedOver) ch?.close(sendBye = false)
+                if (!handedOver) {
+                    ch?.close(sendBye = false)
+                    server?.let { discard(it, registry) }
+                }
             }
         }
     }
 
-    /**
-     * Group owner side: listen on the Wi-Fi Direct address only, and accept the first connection
-     * that comes from inside the group's subnet and completes mutual TLS. A connection whose TLS
-     * handshake fails is dropped and listening continues; any later security failure ends the
-     * session.
-     */
-    private suspend fun acceptPeer(endpoint: P2pEndpoint, registry: SocketRegistry, gen: Int): Established {
+    /** Group owner side: listens on the Wi-Fi Direct address only. The caller closes it. */
+    private fun openServer(endpoint: P2pEndpoint, registry: SocketRegistry): ServerSocket {
         val server = ServerSocket()
         if (!registry.register(server)) throw IOException("the session ended")
         try {
             server.reuseAddress = true
             server.bind(InetSocketAddress(endpoint.localAddress, PORT))
             server.soTimeout = 1000
-            log("Listening on ${endpoint.localAddress.hostAddress}:$PORT (${endpoint.interfaceName} only)")
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val socket = try {
-                    server.accept()
-                } catch (e: SocketTimeoutException) {
-                    continue
-                }
-                if (!registry.register(socket)) throw IOException("the session ended")
-                val remote = socket.inetAddress
-                val problem = LinkEndpoint.checkPeer(endpoint, remote)
-                    ?: if (LinkEndpoint.toIpv4(socket.localAddress) != endpoint.localAddress) {
-                        "it arrived on ${socket.localAddress?.hostAddress}, not ${endpoint.localAddress.hostAddress}"
-                    } else {
-                        null
-                    }
-                if (problem != null) {
-                    log("Rejected connection from ${remote?.hostAddress}: $problem")
-                    discard(socket, registry)
-                    continue
-                }
-                log("Incoming connection from ${remote?.hostAddress}")
-                try {
-                    return secure(socket, isServer = true, registry = registry, gen = gen)
-                } catch (e: SecurityFailure) {
-                    discard(socket, registry)
-                    if (e.kind != FailureKind.SECURE_HANDSHAKE_FAILED) throw e
-                    log("Rejected connection from ${remote?.hostAddress}: ${e.message}")
-                } catch (e: ControlProtocol.VersionMismatchException) {
-                    discard(socket, registry)
-                    throw e
-                } catch (e: CancellationException) {
-                    discard(socket, registry)
-                    throw e
-                } catch (e: IOException) {
-                    log("Rejected connection from ${remote?.hostAddress}: ${e.message}")
-                    discard(socket, registry)
-                }
-            }
-        } finally {
+        } catch (e: IOException) {
             discard(server, registry)
+            throw e
+        }
+        log("Listening on ${endpoint.localAddress.hostAddress}:$PORT (${endpoint.interfaceName} only)")
+        return server
+    }
+
+    /**
+     * Group owner side: accept the next connection that comes from inside the group's subnet and
+     * completes mutual TLS. A connection whose TLS handshake fails is dropped and listening
+     * continues; any later security failure ends the attempt. With [allowPairing] false only a
+     * phone that is already paired gets through.
+     */
+    private suspend fun acceptPeer(
+        server: ServerSocket,
+        endpoint: P2pEndpoint,
+        registry: SocketRegistry,
+        gen: Int,
+        allowPairing: Boolean,
+    ): Established {
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val socket = try {
+                server.accept()
+            } catch (e: SocketTimeoutException) {
+                continue
+            }
+            if (!registry.register(socket)) throw IOException("the session ended")
+            val remote = socket.inetAddress
+            val problem = LinkEndpoint.checkPeer(endpoint, remote)
+                ?: if (LinkEndpoint.toIpv4(socket.localAddress) != endpoint.localAddress) {
+                    "it arrived on ${socket.localAddress?.hostAddress}, not ${endpoint.localAddress.hostAddress}"
+                } else {
+                    null
+                }
+            if (problem != null) {
+                log("Rejected connection from ${remote?.hostAddress}: $problem")
+                discard(socket, registry)
+                continue
+            }
+            log("Incoming connection from ${remote?.hostAddress}")
+            try {
+                return secure(socket, isServer = true, registry = registry, gen = gen, allowPairing = allowPairing)
+            } catch (e: SecurityFailure) {
+                discard(socket, registry)
+                if (e.kind != FailureKind.SECURE_HANDSHAKE_FAILED) throw e
+                log("Rejected connection from ${remote?.hostAddress}: ${e.message}")
+            } catch (e: ControlProtocol.VersionMismatchException) {
+                discard(socket, registry)
+                throw e
+            } catch (e: CancellationException) {
+                discard(socket, registry)
+                throw e
+            } catch (e: IOException) {
+                log("Rejected connection from ${remote?.hostAddress}: ${e.message}")
+                discard(socket, registry)
+            }
+        }
+    }
+
+    /**
+     * Hosting phone, once the first phone is linked: keeps accepting phones that are already
+     * paired with this one, each on its own control link, as members of the group talk (Phase 7).
+     * A phone that is not paired, or fails any check, is turned away without disturbing the phones
+     * already linked. The session's end closes the server, which ends this loop.
+     */
+    private suspend fun acceptMembers(server: ServerSocket, endpoint: P2pEndpoint, registry: SocketRegistry, gen: Int) = coroutineScope {
+        while (gen == generation && !server.isClosed) {
+            val established = try {
+                acceptPeer(server, endpoint, registry, gen, allowPairing = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (server.isClosed) break
+                log("Turned away a phone: ${e.message}")
+                continue
+            }
+            val ch = established.channel
+            val name = established.peer.name
+            val id = groupHost?.link(name, established.remoteAddress) { ch.sendMessage(it) }
+            if (id == null) {
+                log("Turned away $name: the group is full")
+                ch.close(sendBye = true)
+                continue
+            }
+            extraMembers[id] = ch
+            log("$name joined the link as member $id")
+            launch {
+                val exit = try {
+                    ch.run(onStats = {}, onMedia = { m -> if (gen == generation) runCatching { groupHost?.onMessage(id, m) } })
+                } finally {
+                    extraMembers.remove(id)
+                    groupHost?.unlink(id)
+                    ch.close(sendBye = false)
+                }
+                log("$name left the link: $exit")
+            }
         }
     }
 
@@ -1236,7 +1404,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     /** Mutual TLS, then HELLO / STATUS and, if needed, pairing. */
-    private suspend fun secure(socket: Socket, isServer: Boolean, registry: SocketRegistry, gen: Int): Established {
+    private suspend fun secure(socket: Socket, isServer: Boolean, registry: SocketRegistry, gen: Int, allowPairing: Boolean = true): Established {
         val sec = security ?: throw SecurityFailure(FailureKind.IDENTITY_UNAVAILABLE, securityError ?: "identity not loaded")
         socket.tcpNoDelay = true
         socket.keepAlive = true
@@ -1250,7 +1418,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val ch = ControlChannel(tls.socket) { log(it) }
         try {
             val negotiator = SessionNegotiator(sec.identity.fingerprint, sec.installId, names.ownName, sec.store, { log(it) })
-            val peer = negotiator.negotiate(ch, isServer, tls.peerFingerprint, PromptFor(gen))
+            val peer = negotiator.negotiate(ch, isServer, tls.peerFingerprint, PromptFor(gen), allowPairing)
             return Established(ch, peer, tls.protocol, tls.cipherSuite, socket.localAddress, socket.inetAddress)
         } catch (e: Throwable) {
             ch.close(sendBye = false)
@@ -1345,6 +1513,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 },
                 localCodecs = { if (opusEnabled && opusAvailable) AudioCodec.OPUS.bit else 0 },
             )
+            setUpGroup(isGroupOwner, local, remote, ch, established.peer.name)
             startMediaPoll(generation)
         } else {
             log("Media unavailable: the link addresses are not IPv4")
@@ -1404,6 +1573,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (droppedPeer != null) {
             media?.kind?.takeIf { media?.session != null && it != MediaKind.TONE }?.let { lastEnd = it to MediaEnd.LINK_LOST }
+            if (group?.session != null) lastEnd = MediaKind.PTT to MediaEnd.LINK_LOST
             // Before the link state changes, so the notification (and the foreground service) stays.
             _ui.update { it.copy(reconnectingTo = linked?.details?.peerName) }
         }
@@ -1423,6 +1593,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         holdWifiLock(false)
         val m = media
         media = null
+        val gh = groupHost
+        val ownLink = ownGroupLink
+        val g = group
+        groupHost = null
+        ownGroupLink = null
+        group = null
+        primaryMemberId = null
+        val extras = extraMembers.values.toList()
+        extraMembers.clear()
 
         val ch = channel
         val registry = sockets
@@ -1442,6 +1621,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         // closed at once, so any socket a background thread opens from now on is closed on the spot.
         thread(isDaemon = true, name = "pairloom-close") {
             m?.let { runCatching { it.close() } }
+            if (ownLink != null) runCatching { ownLink.close() } else g?.let { runCatching { it.close() } }
+            gh?.let { runCatching { it.close() } }
+            extras.forEach { it.close(sendBye) }
             ch?.close(sendBye)
             registry.closeAll()
         }

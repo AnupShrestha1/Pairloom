@@ -178,6 +178,48 @@ class ControlProtocolTest {
     }
 
     @Test
+    fun groupTalkMessagesRoundTrip() {
+        val key = "cd".repeat(32); val salt = "01020304"
+        val roster = Message.GroupRoster(
+            3,
+            listOf(
+                ControlProtocol.RosterEntry(0, "Redmi", true),
+                ControlProtocol.RosterEntry(3, "आशा", false),
+            ),
+        )
+        for (m in listOf(
+            Message.GroupJoin(3, 40_000, key, salt),
+            Message.GroupWelcome(1, 7, 41_000, key, salt),
+            Message.GroupLeave(ControlProtocol.LeaveReason.REFUSED),
+            roster,
+            Message.GroupRoster(0, emptyList()),
+            Message.Floor(3),
+            Message.Floor(null),
+        )) {
+            assertEquals(m, roundTrip(m))
+        }
+        // A full roster of long names still fits in one frame.
+        val full = Message.GroupRoster(0, List(ControlProtocol.MAX_ROSTER) { ControlProtocol.RosterEntry(it, "ø".repeat(100), true) })
+        assertTrue(ControlProtocol.encode(full).size - 4 <= ControlProtocol.MAX_FRAME_BODY)
+        assertEquals(ControlProtocol.MAX_ROSTER, (roundTrip(full) as Message.GroupRoster).members.size)
+    }
+
+    @Test
+    fun malformedGroupTalkMessagesAreRejected() {
+        for (bad in listOf(
+            frame(16),                       // GROUP_LEAVE without a reason
+            frame(18, 1, 2),                 // FLOOR with two bytes
+            frame(17, 1, 0, 0, 1, 5, 'a'.code), // ROSTER entry shorter than its name
+            frame(17, 1, 0, 255, 0, 0),         // ROSTER entry with the "nobody" id
+            frame(17, 0, 0, 9),                 // ROSTER with trailing bytes
+            frame(17, 0, 255),                  // ROSTER without the receiver's id
+            frame(15, 0, 255, 1, 1, *IntArray(36)), // WELCOME with the "nobody" id
+        )) {
+            assertThrows(ControlProtocol.ProtocolException::class.java) { ControlProtocol.read(ByteArrayInputStream(bad)) }
+        }
+    }
+
+    @Test
     fun malformedSessionMessagesAreRejected() {
         val bad = listOf(
             frame(5),                       // STATUS without payload

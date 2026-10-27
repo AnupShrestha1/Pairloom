@@ -251,4 +251,11 @@
     <string name="appearance_dark">Dark (pure black)</string>
     <string name="appearance_light">Light</string>
     <string name="hosting_title">Hosting</string>
+    <string name="btn_group_talk">Group talk</string>
+    <plurals name="btn_join_group_talk">
+        <item quantity="one">Join group talk (%1$d in it)</item>
+        <item quantity="other">Join group talk (%1$d in it)</item>
+    </plurals>
+    <string name="group_talk_title">Group talk</string>
+    <string name="group_busy">%1$s has the floor. Let go and try again.</string>
 </resources>

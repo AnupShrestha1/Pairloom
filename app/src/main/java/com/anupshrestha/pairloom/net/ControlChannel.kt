@@ -74,7 +74,7 @@ class ControlChannel(
     /**
      * Runs the heartbeat until the link ends and returns why. Reads happen on an IO thread; the
      * ping loop runs alongside. [onStats] and [onMedia] are called from IO threads; [onMedia]
-     * receives the media-control messages (offer, answer, stop).
+     * receives the media-control messages (offer, answer, stop, group info, and group talk).
      */
     suspend fun run(onStats: (PingStats) -> Unit, onMedia: (Message) -> Unit = {}): Exit = coroutineScope {
         // Session setup can take a while (pairing waits for both users), so the dead-link timer
@@ -116,7 +116,9 @@ class ControlChannel(
                         break
                     }
 
-                    is Message.MediaOffer, is Message.MediaAnswer, Message.MediaStop, is Message.GroupInfo -> onMedia(message)
+                    is Message.MediaOffer, is Message.MediaAnswer, Message.MediaStop, is Message.GroupInfo,
+                    is Message.GroupJoin, is Message.GroupWelcome, is Message.GroupLeave, is Message.GroupRoster, is Message.Floor,
+                    -> onMedia(message)
                     else -> throw ControlProtocol.ProtocolException("Unexpected $message during the heartbeat")
                 }
             }

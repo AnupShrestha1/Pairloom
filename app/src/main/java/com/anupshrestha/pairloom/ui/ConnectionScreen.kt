@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -103,6 +104,8 @@ class ConnectionActions(
     val onToggleMute: () -> Unit,
     val onToggleSpeaker: () -> Unit,
     val onPushToTalk: () -> Unit,
+    /** Join the group push-to-talk (Phase 7). */
+    val onGroupTalk: () -> Unit,
     /** The talk button was pressed (true) or released (false). */
     val onTalk: (Boolean) -> Unit,
     val onToggleOpus: () -> Unit,
@@ -652,6 +655,14 @@ private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions
                     modifier = Modifier.weight(1f).heightIn(min = 60.dp),
                 ) { Text(stringResource(R.string.btn_push_to_talk), style = MaterialTheme.typography.labelLarge) }
             }
+            details.group?.let { group ->
+                val others = group.members.count { it.inTalk && !it.isThisPhone }
+                SecondButton(
+                    if (others > 0) pluralStringResource(R.plurals.btn_join_group_talk, others, others) else stringResource(R.string.btn_group_talk),
+                    actions.onGroupTalk,
+                    enabled = !group.joining,
+                )
+            }
             SecondButton(stringResource(R.string.btn_disconnect), actions.onDisconnect)
         }
     }
@@ -765,15 +776,21 @@ private fun ColumnScope.PushToTalk(details: LinkDetails, actions: ConnectionActi
     // Never leave the microphone sending if the panel goes away or the mode changes mid-press.
     DisposableEffect(tapMode) { onDispose { if (talking) setTalking(false) } }
     val peerTalking = s?.peerTalking == true
+    // In the group talk the talker is whoever has the floor, and pressing while someone else has
+    // it is not heard (the hub drops it), so say so.
+    val group = details.group?.takeIf { it.inTalk }
+    val talker = group?.floorHolder?.takeUnless { group.floorIsMine } ?: details.peerName
+    val busy = talking && group != null && group.floorHolder != null && !group.floorIsMine
     val status = when {
-        talking && peerTalking -> stringResource(R.string.ptt_both_talking, details.peerName)
+        busy -> stringResource(R.string.group_busy, talker)
+        talking && peerTalking -> stringResource(R.string.ptt_both_talking, talker)
         talking -> stringResource(R.string.ptt_you_talking)
-        peerTalking -> stringResource(R.string.ptt_peer_talking, details.peerName)
+        peerTalking -> stringResource(R.string.ptt_peer_talking, talker)
         else -> stringResource(R.string.ptt_quiet)
     }
     Stage(
         mode = RingsMode.JOINED,
-        title = details.peerName,
+        title = if (group != null) stringResource(R.string.group_talk_title) else details.peerName,
         status = status,
         statusColor = if (peerTalking) threads.peerText else MaterialTheme.colorScheme.onSurfaceVariant,
         peerLevel = if (peerTalking) maxOf(s?.peerLevel ?: 0f, 0.35f) else 0f,

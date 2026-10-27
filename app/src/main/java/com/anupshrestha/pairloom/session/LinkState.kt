@@ -140,7 +140,22 @@ data class LinkDetails(
     /** How the last call or push-to-talk session ended, until the next one starts. */
     val lastEndKind: com.anupshrestha.pairloom.media.MediaKind? = null,
     val lastEnd: com.anupshrestha.pairloom.media.MediaEnd? = null,
+    /** Group talk (Phase 7), once the host has sent who is on the link. */
+    val group: GroupDetails? = null,
 )
+
+/** Group push-to-talk as the screen shows it. */
+data class GroupDetails(
+    val members: List<GroupMemberUi>,
+    /** This phone is in the talk (or joining it). */
+    val inTalk: Boolean,
+    val joining: Boolean,
+    /** The name of whoever has the floor, if anyone. */
+    val floorHolder: String?,
+    val floorIsMine: Boolean,
+)
+
+data class GroupMemberUi(val name: String, val inTalk: Boolean, val isThisPhone: Boolean)
 
 /** A paired phone as shown in the list. */
 data class PairedDeviceUi(

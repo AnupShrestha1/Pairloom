@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
             onToggleMute = viewModel::toggleMute,
             onToggleSpeaker = viewModel::toggleSpeaker,
             onPushToTalk = { withMicrophone(viewModel::startPushToTalk) },
+            onGroupTalk = { withMicrophone(viewModel::startGroupTalk) },
             onTalk = viewModel::setTalking,
             onToggleOpus = viewModel::toggleOpus,
             onJoinPaired = viewModel::joinPaired,

@@ -60,7 +60,14 @@ class SessionNegotiator(
     private val messageTimeoutMs: Int = 10_000,
     private val confirmTimeoutMs: Long = 120_000,
 ) {
-    suspend fun negotiate(channel: ControlChannel, isServer: Boolean, peerFingerprint: ByteArray, prompt: PairingPrompt): SessionPeer {
+    /** With [allowPairing] false, only an already paired phone gets through (the group host's later members). */
+    suspend fun negotiate(
+        channel: ControlChannel,
+        isServer: Boolean,
+        peerFingerprint: ByteArray,
+        prompt: PairingPrompt,
+        allowPairing: Boolean = true,
+    ): SessionPeer {
         val peerFpHex = peerFingerprint.toHex()
         val ownHello = Message.Hello(ControlProtocol.VERSION, ownInstallIdHex, localName)
         // The server speaks first: in TLS 1.3 the client must not send before the server accepted it.
@@ -98,6 +105,9 @@ class SessionNegotiator(
             return SessionPeer(peerHello.deviceName, peerFpHex, peerHello.installIdHex, newlyPaired = false)
         }
 
+        if (!allowPairing) {
+            throw SecurityFailure(FailureKind.PAIRING_REJECTED, "${peerHello.deviceName} is not paired with this phone yet")
+        }
         log("Pairing: comparing codes with ${peerHello.deviceName}")
         val code = pairingCode(channel, isServer, peerFingerprint)
         confirmBoth(channel, prompt, peerHello.deviceName, code)

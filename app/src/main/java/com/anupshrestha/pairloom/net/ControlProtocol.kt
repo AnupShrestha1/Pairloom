@@ -18,8 +18,8 @@ import java.io.InputStream
  */
 object ControlProtocol {
     const val MAGIC = "PLM1"
-    const val VERSION = 6
-    const val MAX_FRAME_BODY = 256
+    const val VERSION = 7
+    const val MAX_FRAME_BODY = 1024
     const val MAX_NAME_BYTES = 64
     const val INSTALL_ID_BYTES = 16
     const val PAIRING_VALUE_BYTES = 32
@@ -37,6 +37,17 @@ object ControlProtocol {
     private const val TYPE_MEDIA_ANSWER = 11
     private const val TYPE_MEDIA_STOP = 12
     private const val TYPE_GROUP_INFO = 13
+    private const val TYPE_GROUP_JOIN = 14
+    private const val TYPE_GROUP_WELCOME = 15
+    private const val TYPE_GROUP_LEAVE = 16
+    private const val TYPE_GROUP_ROSTER = 17
+    private const val TYPE_FLOOR = 18
+
+    /** The most members a roster lists (with 64-byte names it still fits in one frame). */
+    const val MAX_ROSTER = 12
+
+    /** [Message.Floor] holder byte for "nobody". */
+    private const val NOBODY = 255
 
     const val MEDIA_KEY_BYTES = 32
     const val MEDIA_SALT_BYTES = 4
@@ -91,6 +102,39 @@ object ControlProtocol {
             override fun toString(): String =
                 "GroupInfo(networkName=$networkName, passphrase=<hidden>, staFrequencyMhz=$staFrequencyMhz)"
         }
+
+        /**
+         * Group push-to-talk (Phase 7), member to host: join the group talk. Like a [MediaOffer]:
+         * the codecs the member can use, its UDP port and the key and salt of the packets it sends.
+         */
+        data class GroupJoin(val codecs: Int, val port: Int, val keyHex: String, val saltHex: String) : Message
+
+        /**
+         * Host to member: admitted, with the group's codec, the member's id in the roster, and the
+         * hub's UDP port, key and salt for the packets the member receives.
+         */
+        data class GroupWelcome(val codec: Int, val memberId: Int, val port: Int, val keyHex: String, val saltHex: String) : Message
+
+        /** Either way: leaving the group talk (member), or not admitted / group talk over (host). */
+        data class GroupLeave(val reason: Int) : Message
+
+        /**
+         * Host to each phone on the link: every phone on it (the host included), whether each is in
+         * the group talk, and which entry is the receiving phone.
+         */
+        data class GroupRoster(val yourId: Int, val members: List<RosterEntry>) : Message
+
+        /** Host to members in the group talk: who has the floor (null: nobody). */
+        data class Floor(val holderId: Int?) : Message
+    }
+
+    data class RosterEntry(val id: Int, val name: String, val inTalk: Boolean)
+
+    /** [Message.GroupLeave] reasons. */
+    object LeaveReason {
+        const val LEFT = 0
+        const val REFUSED = 1
+        const val ENDED = 2
     }
 
     /** The peer sent something that is not valid protocol data. */
@@ -170,6 +214,50 @@ object ControlProtocol {
             }
 
             Message.MediaStop -> out.writeByte(TYPE_MEDIA_STOP)
+
+            is Message.GroupJoin -> {
+                require(message.codecs in 0..255) { "codec mask out of range" }
+                out.writeByte(TYPE_GROUP_JOIN)
+                out.writeByte(message.codecs)
+                writeMedia(out, message.port, message.keyHex, message.saltHex)
+            }
+
+            is Message.GroupWelcome -> {
+                require(message.codec in 0..255) { "codec out of range" }
+                require(message.memberId in 0 until NOBODY) { "member id out of range" }
+                out.writeByte(TYPE_GROUP_WELCOME)
+                out.writeByte(message.codec)
+                out.writeByte(message.memberId)
+                writeMedia(out, message.port, message.keyHex, message.saltHex)
+            }
+
+            is Message.GroupLeave -> {
+                require(message.reason in 0..255) { "reason out of range" }
+                out.writeByte(TYPE_GROUP_LEAVE)
+                out.writeByte(message.reason)
+            }
+
+            is Message.GroupRoster -> {
+                require(message.members.size <= MAX_ROSTER) { "roster too long" }
+                require(message.yourId in 0 until NOBODY) { "member id out of range" }
+                out.writeByte(TYPE_GROUP_ROSTER)
+                out.writeByte(message.members.size)
+                out.writeByte(message.yourId)
+                for (m in message.members) {
+                    require(m.id in 0 until NOBODY) { "member id out of range" }
+                    val name = truncateUtf8(m.name, MAX_NAME_BYTES)
+                    out.writeByte(m.id)
+                    out.writeByte(if (m.inTalk) 1 else 0)
+                    out.writeByte(name.size)
+                    out.write(name)
+                }
+            }
+
+            is Message.Floor -> {
+                require(message.holderId == null || message.holderId in 0 until NOBODY) { "member id out of range" }
+                out.writeByte(TYPE_FLOOR)
+                out.writeByte(message.holderId ?: NOBODY)
+            }
 
             is Message.GroupInfo -> {
                 require(GroupCredentials.isValid(message.networkName, message.passphrase)) { "invalid group credentials" }
@@ -265,6 +353,32 @@ object ControlProtocol {
                 Message.GroupInfo(name, pass, frequency)
             }
 
+            TYPE_GROUP_JOIN -> {
+                if (payload.isEmpty()) throw ProtocolException("GROUP_JOIN is empty")
+                val codecs = payload[0].toInt() and 0xFF
+                readMedia(payload.copyOfRange(1, payload.size), "GROUP_JOIN").let { (p, k, s) -> Message.GroupJoin(codecs, p, k, s) }
+            }
+
+            TYPE_GROUP_WELCOME -> {
+                if (payload.size < 2) throw ProtocolException("GROUP_WELCOME is too short")
+                val codec = payload[0].toInt() and 0xFF
+                val id = payload[1].toInt() and 0xFF
+                if (id == NOBODY) throw ProtocolException("GROUP_WELCOME has no member id")
+                readMedia(payload.copyOfRange(2, payload.size), "GROUP_WELCOME").let { (p, k, s) -> Message.GroupWelcome(codec, id, p, k, s) }
+            }
+
+            TYPE_GROUP_LEAVE -> {
+                if (payload.size != 1) throw ProtocolException("GROUP_LEAVE must have a 1-byte payload")
+                Message.GroupLeave(payload[0].toInt() and 0xFF)
+            }
+
+            TYPE_GROUP_ROSTER -> decodeRoster(payload)
+
+            TYPE_FLOOR -> {
+                if (payload.size != 1) throw ProtocolException("FLOOR must have a 1-byte payload")
+                Message.Floor((payload[0].toInt() and 0xFF).takeIf { it != NOBODY })
+            }
+
             TYPE_CONFIRM -> {
                 if (payload.size != 1 || (payload[0].toInt() and 0xFF) > 1) throw ProtocolException("CONFIRM must be 0 or 1")
                 Message.Confirm(payload[0].toInt() == 1)
@@ -292,6 +406,28 @@ object ControlProtocol {
         val installId = payload.copyOfRange(idStart, nameLengthAt).joinToString("") { "%02x".format(it) }
         val name = String(payload, nameLengthAt + 1, nameLength, Charsets.UTF_8)
         return Message.Hello(version, installId, name)
+    }
+
+    private fun decodeRoster(payload: ByteArray): Message.GroupRoster {
+        if (payload.size < 2) throw ProtocolException("GROUP_ROSTER is too short")
+        val count = payload[0].toInt() and 0xFF
+        val yourId = payload[1].toInt() and 0xFF
+        if (count > MAX_ROSTER) throw ProtocolException("GROUP_ROSTER lists too many members")
+        if (yourId == NOBODY) throw ProtocolException("GROUP_ROSTER has no id for the receiver")
+        var at = 2
+        val members = List(count) {
+            if (at + 3 > payload.size) throw ProtocolException("GROUP_ROSTER is too short")
+            val id = payload[at].toInt() and 0xFF
+            val flags = payload[at + 1].toInt() and 0xFF
+            val n = payload[at + 2].toInt() and 0xFF
+            if (id == NOBODY || flags > 1 || n > MAX_NAME_BYTES) throw ProtocolException("GROUP_ROSTER entry is malformed")
+            if (at + 3 + n > payload.size) throw ProtocolException("GROUP_ROSTER is too short")
+            val name = String(payload, at + 3, n, Charsets.UTF_8)
+            at += 3 + n
+            RosterEntry(id, name, flags == 1)
+        }
+        if (at != payload.size) throw ProtocolException("GROUP_ROSTER has the wrong size")
+        return Message.GroupRoster(yourId, members)
     }
 
     private fun decodePingPayload(payload: ByteArray): Pair<Int, Long> {
