@@ -207,6 +207,8 @@ data class LinkUiState(
     /** This phone's name as the other phone sees it. */
     val ownName: String? = null,
     val appearance: Appearance = Appearance.SYSTEM,
+    /** Debug builds: the simulated group member on this (hosting) phone is running. */
+    val virtualPhoneOn: Boolean = false,
     val pairedDevices: List<PairedDeviceUi> = emptyList(),
     /** The user refused the microphone permission; calls cannot start. */
     val micDenied: Boolean = false,

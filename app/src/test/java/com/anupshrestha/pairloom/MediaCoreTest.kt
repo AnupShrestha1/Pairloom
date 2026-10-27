@@ -2,6 +2,7 @@ package com.anupshrestha.pairloom
 
 import com.anupshrestha.pairloom.media.AudioCodec
 import com.anupshrestha.pairloom.media.Concealer
+import com.anupshrestha.pairloom.media.DecodeOrder
 import com.anupshrestha.pairloom.media.Opus
 import com.anupshrestha.pairloom.media.DirectionKey
 import com.anupshrestha.pairloom.media.JitterBuffer
@@ -348,5 +349,31 @@ class MediaCoreTest {
         val peak = (0 until 480).maxOf { kotlin.math.abs((f[2 * it].toInt() and 0xFF) or (f[2 * it + 1].toInt() shl 8)) }
         assertTrue(peak in 9000..10000) // amplitude 0.3
         assertFalse(tone.frame(0).contentEquals(tone.frame(1)))
+    }
+
+    @Test
+    fun decodeOrderTrustsMatchingTimesAndOtherwiseFollowsTheQueue() {
+        val d = DecodeOrder()
+        // Two spurts of 20 ms packets with a jump between them, as push-to-talk sends.
+        listOf(100L, 102L, 104L, 900L, 902L).forEachIndexed { i, first -> d.queued(first, 2, i.toLong()) }
+        assertEquals(100L to 0L, d.output(100, 2))
+        assertEquals(102L to 1L, d.output(102, 2))
+        assertEquals(104L to 2L, d.output(104, 2))
+        // The decoder keeps counting on (106, 108) instead of jumping to 900.
+        assertEquals(900L to 3L, d.output(106, 2))
+        assertEquals(902L to 4L, d.output(108, 2))
+        assertEquals(2L, d.mismatches)
+    }
+
+    @Test
+    fun decodeOrderSkipsPacketsThatProducedNothingAndJoinsSplitOutputs() {
+        val d = DecodeOrder()
+        listOf(10L, 12L, 14L).forEach { d.queued(it, 2, it) }
+        assertEquals(12L to 12L, d.output(12, 2)) // packet 10 never came out
+        assertEquals(14L to 14L, d.output(14, 1)) // split in two 10 ms outputs
+        assertEquals(15L to null, d.output(15, 1))
+        assertEquals(0L, d.mismatches)
+        d.queued(20, 2, 20); d.notQueued(20)
+        assertEquals(30L to null, d.output(30, 2)) // nothing pending: the reported time is all there is
     }
 }

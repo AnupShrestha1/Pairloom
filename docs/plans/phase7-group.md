@@ -134,3 +134,34 @@ Still open:
   to host instead of joining, so joining an existing group needs its own button (G4).
 - Several real phones in one Wi-Fi Direct group are untested (only two phones are available). The
   virtual phone covers the relay path on the host.
+
+## G3 results (2026-10-27)
+- **Virtual phone** (`src/debug/.../debugtools/VirtualPhone.kt`; `src/release` and `src/profile`
+  hold a stub with `AVAILABLE = false`):
+  - it joins the hub in-process with its own keys and UDP socket, so its audio goes through the
+    same relay as a real phone's;
+  - every 8 s it plays a 2 s, 330 Hz test tone, but only while nobody else has the floor;
+  - it logs what it heard every 10 s.
+
+  It is switched on in Settings > troubleshooting, on the hosting phone while linked. Checked:
+  the release and profile APKs contain none of its code.
+- **Three-way check** (Redmi hosting with the virtual phone, A03s joined):
+  - the A03s talked for 12 s; the Redmi showed "Galaxy is talking", and the virtual phone heard
+    1,229 frames with none lost, holding back twice while the A03s had the floor;
+  - the A03s heard the virtual phone's spurts (0.17 % lost, about 210 ms one-way);
+  - a press that started during a virtual spurt was shut out for the whole press, as designed.
+- **Found and fixed: the Opus decoders on both phones do not keep input timestamps across a
+  jump.** After a pause between spurts or a change of talker, their output times keep counting
+  on, for example 3622 for a packet at 6559. Frames landed seconds from where they belonged:
+  - on the A03s, 16 % lost, a 6 s delay spread and an 11 s "decode delay";
+  - ordinary 1:1 Opus push-to-talk was affected too.
+
+  The decoder now matches outputs to packets in order (`DecodeOrder`, as the encoder already
+  did). A timestamp is trusted only when it matches. After the fix the A03s lost 0.2-0.3 %, with a
+  70-90 ms spread.
+- **Fixed: Disconnect could still look like a drop.** Closing the virtual phone's codecs took
+  about 4 s. The goodbyes now go out before any audio is closed, and the group is removed no
+  sooner than 300 ms after them. Checked: the other phone saw "disconnected".
+- Tests: 129, including the decoder labelling.
+- Not confirmed: the A03s showing "Virtual phone is talking". Its screen reads never caught it,
+  probably because uiautomator waits for the glowing rings to stop moving; the Redmi showed it.

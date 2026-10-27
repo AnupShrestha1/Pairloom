@@ -168,11 +168,11 @@ class OpusEncoder(
 
 /**
  * Opus decoder: packets go in on the receive thread; the decoded PCM, delivered on the codec
- * thread, is split into 10 ms frames indexed from the packet's first frame (carried through the
- * codec as the presentation time).
+ * thread, is split into 10 ms frames indexed from the packet's first frame. Outputs are matched to
+ * packets in order ([DecodeOrder]), as not every platform decoder keeps the presentation times.
  */
 class OpusDecoder(private val out: PcmFrameSink, private val log: (String) -> Unit = {}) : AudioDecoder {
-    private val queued = java.util.concurrent.ConcurrentHashMap<Long, Long>() // pts -> nanos queued
+    private val order = DecodeOrder()
     private val turnaround = Turnaround()
     private var oddOutputs = 0
 
@@ -189,16 +189,19 @@ class OpusDecoder(private val out: PcmFrameSink, private val log: (String) -> Un
     }
 
     override fun decode(firstIndex: Long, payload: ByteArray) {
-        val pts = firstIndex * US_PER_FRAME
-        queued[pts] = System.nanoTime()
-        if (!impl.queue(payload, pts)) queued.remove(pts)
-        if (queued.size > 200) queued.clear() // outputs that never came
+        val frames = Opus.packetSamples(payload)?.let { (it + Opus.FRAME_SAMPLES - 1) / Opus.FRAME_SAMPLES } ?: 2
+        order.queued(firstIndex, frames, System.nanoTime())
+        if (!impl.queue(payload, firstIndex * US_PER_FRAME)) order.notQueued(firstIndex)
     }
 
     private fun onPcm(pcm: ByteArray, ptsUs: Long) {
-        queued.remove(ptsUs)?.let { turnaround.add(System.nanoTime() - it) }
         if (pcm.size % Opus.FRAME_BYTES != 0 && oddOutputs++ % 100 == 0) log("Opus decoder: output of ${pcm.size} bytes is not whole 10 ms frames")
-        val first = ptsUs / US_PER_FRAME
+        val before = order.mismatches
+        val (first, queuedAt) = order.output(ptsUs / US_PER_FRAME, pcm.size / Opus.FRAME_BYTES)
+        queuedAt?.let { turnaround.add(System.nanoTime() - it) }
+        if (order.mismatches != before && (before == 0L || order.mismatches % 500 == 0L)) {
+            log("Opus decoder: output time ${ptsUs / US_PER_FRAME} is not its packet's ($first); matched by order (${order.mismatches} so far)")
+        }
         for (k in 0 until pcm.size / Opus.FRAME_BYTES) {
             out.frame(first + k, pcm.copyOfRange(k * Opus.FRAME_BYTES, (k + 1) * Opus.FRAME_BYTES))
         }
@@ -206,6 +209,6 @@ class OpusDecoder(private val out: PcmFrameSink, private val log: (String) -> Un
 
     override fun close() {
         impl.release()
-        log("Opus decoder closed; packet in to PCM out: $turnaround")
+        log("Opus decoder closed; packet in to PCM out: $turnaround; outputs matched by order: ${order.mismatches}")
     }
 }

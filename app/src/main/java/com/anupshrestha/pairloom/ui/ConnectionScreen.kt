@@ -106,6 +106,8 @@ class ConnectionActions(
     val onPushToTalk: () -> Unit,
     /** Join the group push-to-talk (Phase 7). */
     val onGroupTalk: () -> Unit,
+    /** Debug builds: add or remove the simulated group member on the hosting phone. */
+    val onToggleVirtualPhone: () -> Unit = {},
     /** The talk button was pressed (true) or released (false). */
     val onTalk: (Boolean) -> Unit,
     val onToggleOpus: () -> Unit,

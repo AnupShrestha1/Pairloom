@@ -133,3 +133,61 @@ object Opus {
         return listOf(head, nanos(0), nanos(80_000_000))
     }
 }
+
+/**
+ * Labels a decoder's output with the frames of the packet it came from. Some platform decoders do
+ * not carry input timestamps across a jump in them (a pause between push-to-talk spurts, or a new
+ * talker in a group): their output timestamps keep counting on from before, which put frames
+ * seconds away from where they belong (seen on the A03s in Phase 7). A decoder emits packets in
+ * the order they went in, so outputs are matched to queued packets in order. An output timestamp
+ * that equals a queued packet's first frame is still trusted, and packets queued before it are
+ * taken to have produced nothing. Thread-safe.
+ */
+class DecodeOrder(private val maxPending: Int = 200) {
+    private class Entry(val first: Long, val frames: Int, val queuedNanos: Long) {
+        var done = 0
+    }
+
+    private val pending = ArrayDeque<Entry>()
+
+    /** Outputs whose timestamp did not match the packet they came from. */
+    var mismatches = 0L
+        private set
+
+    @Synchronized
+    fun queued(firstIndex: Long, frames: Int, nanos: Long) {
+        pending.addLast(Entry(firstIndex, frames.coerceAtLeast(1), nanos))
+        while (pending.size > maxPending) pending.removeFirst()
+    }
+
+    /** The packet last queued did not reach the decoder after all. */
+    @Synchronized
+    fun notQueued(firstIndex: Long) {
+        if (pending.lastOrNull()?.first == firstIndex) pending.removeLast()
+    }
+
+    /**
+     * An output of [frames] frames whose timestamp says it starts at [reportedIndex]. Returns its
+     * real first frame index, and when its packet was queued (on that packet's first output only).
+     */
+    @Synchronized
+    fun output(reportedIndex: Long, frames: Int): Pair<Long, Long?> {
+        val head = pending.firstOrNull() ?: return reportedIndex to null
+        val entry = if (head.done > 0 && reportedIndex == head.first + head.done) {
+            head // the rest of a packet the decoder split
+        } else {
+            val exact = pending.indexOfFirst { it.done == 0 && it.first == reportedIndex }
+            if (exact >= 0) {
+                repeat(exact) { pending.removeFirst() }
+            } else {
+                mismatches++
+            }
+            pending.first()
+        }
+        val start = entry.first + entry.done
+        val nanos = if (entry.done == 0) entry.queuedNanos else null
+        entry.done += frames
+        if (entry.done >= entry.frames) pending.removeFirst()
+        return start to nanos
+    }
+}

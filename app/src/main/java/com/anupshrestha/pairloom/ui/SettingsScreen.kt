@@ -1,6 +1,7 @@
 package com.anupshrestha.pairloom.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import com.anupshrestha.pairloom.debugtools.VirtualPhone
 import com.anupshrestha.pairloom.session.Appearance
 import androidx.compose.material3.RadioButton
 import androidx.compose.foundation.selection.selectableGroup
@@ -245,6 +246,21 @@ private fun Troubleshooting(ui: LinkUiState, actions: ConnectionActions, link: L
             Text(stringResource(R.string.media_title), style = MaterialTheme.typography.titleMedium)
             MediaFacts(link.details, actions)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            if (VirtualPhone.AVAILABLE && link.details.isGroupOwner) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .toggleable(value = ui.virtualPhoneOn, role = Role.Switch, onValueChange = { actions.onToggleVirtualPhone() }),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.virtual_phone_title), style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(R.string.virtual_phone_body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(checked = ui.virtualPhoneOn, onCheckedChange = null)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
         }
         Fact(stringResource(if (ui.locationServicesOn) R.string.location_status_on else R.string.location_status_off))
         ui.ownKey?.let { Fact(stringResource(R.string.own_key, it)) }

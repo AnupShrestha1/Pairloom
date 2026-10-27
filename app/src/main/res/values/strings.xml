@@ -260,4 +260,6 @@
     <string name="group_busy">%1$s has the floor. Let go and try again.</string>
     <string name="group_peer_talking">%1$s is talking</string>
     <string name="group_press_again">Not heard. Let go and press again to talk.</string>
+    <string name="virtual_phone_title">Virtual phone (debug build)</string>
+    <string name="virtual_phone_body">A simulated third phone joins the group talk on this phone and beeps for 2 s every 8 s.</string>
 </resources>

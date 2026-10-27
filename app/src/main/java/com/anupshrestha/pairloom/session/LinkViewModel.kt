@@ -29,6 +29,7 @@ import com.anupshrestha.pairloom.media.MediaSession
 import com.anupshrestha.pairloom.media.GroupHost
 import com.anupshrestha.pairloom.media.GroupMemberLink
 import com.anupshrestha.pairloom.media.InProcessLink
+import com.anupshrestha.pairloom.debugtools.VirtualPhone
 import com.anupshrestha.pairloom.net.ControlChannel
 import com.anupshrestha.pairloom.net.ControlProtocol
 import com.anupshrestha.pairloom.net.LinkEndpoint
@@ -544,6 +545,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var ownGroupLink: InProcessLink? = null
     @Volatile private var group: GroupMemberLink? = null
     @Volatile private var primaryMemberId: Int? = null
+    @Volatile private var groupLocal: InetAddress? = null
+
+    /** Debug builds (G3): a simulated member on the hosting phone, see [VirtualPhone]. */
+    @Volatile private var virtualPhone: Closeable? = null
 
     /** Hosting phone: control links to the phones that joined after the first, by member id. */
     private val extraMembers = java.util.concurrent.ConcurrentHashMap<Int, ControlChannel>()
@@ -554,6 +559,25 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         if (_ui.value.link !is LinkState.Linked || media?.isBusy == true) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { g.join() }.onFailure { log("Could not join the group talk: ${it.message}") }
+        }
+    }
+
+    /** Debug builds, hosting phone: adds or removes the simulated group member. */
+    fun toggleVirtualPhone() {
+        if (!VirtualPhone.AVAILABLE) return
+        val host = groupHost ?: return
+        val local = groupLocal ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val running = virtualPhone
+            if (running != null) {
+                virtualPhone = null
+                runCatching { running.close() }
+            } else {
+                virtualPhone = runCatching { VirtualPhone.start(host, local, opusEnabled && opusAvailable) { log(it) } }
+                    .onFailure { log("Could not add the virtual phone: ${it.message}") }
+                    .getOrNull()
+            }
+            _ui.update { it.copy(virtualPhoneOn = virtualPhone != null) }
         }
     }
 
@@ -740,6 +764,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             log = { log(it) },
         )
         groupHost = host
+        groupLocal = local
         val own = InProcessLink(host, names.ownName, local) { send -> newGroupMember(local, local, send) }
         ownGroupLink = own
         group = own.member
@@ -1600,6 +1625,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         ownGroupLink = null
         group = null
         primaryMemberId = null
+        groupLocal = null
+        val virtual = virtualPhone
+        virtualPhone = null
+        if (_ui.value.virtualPhoneOn) _ui.update { it.copy(virtualPhoneOn = false) }
         val extras = extraMembers.values.toList()
         extraMembers.clear()
 
@@ -1628,9 +1657,17 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             gh?.let { runCatching { it.close() } }
             extras.forEach { it.close(sendBye) }
             ch?.close(sendBye)
+            val byeSentAt = SystemClock.elapsedRealtime()
+            // Closing audio and codecs can take seconds; it waits until the goodbyes are out.
+            virtual?.let { runCatching { it.close() } }
             m?.let { runCatching { it.close() } }
             if (ownLink != null) runCatching { ownLink.close() } else g?.let { runCatching { it.close() } }
             registry.closeAll()
+            // A goodbye still in flight is lost if the group goes at once (seen on the A03s).
+            if (sendBye) {
+                val wait = BYE_GRACE_MS - (SystemClock.elapsedRealtime() - byeSentAt)
+                if (wait > 0) runCatching { Thread.sleep(wait) }
+            }
             if (c != null) {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     c.shutdown {
@@ -1768,6 +1805,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val CALL_POLL_MS = 200L
         const val DIRECT_RETRY_MS = 5_000L
         const val RECONNECT_WINDOW_MS = 90_000L
+        const val BYE_GRACE_MS = 300L
 
         /** How a link to a paired phone ends when nobody chose to end it. */
         val DROP_REASONS = setOf(DisconnectReason.LINK_TIMEOUT, DisconnectReason.GROUP_ENDED, DisconnectReason.IO_ERROR)
