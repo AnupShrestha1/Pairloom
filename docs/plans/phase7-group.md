@@ -182,3 +182,46 @@ Still open:
 - Checked on both phones with the virtual phone: the member lists on both screens, "Galaxy is
   talking" on the Redmi while the A03s talked, the virtual phone holding back while the A03s had
   the floor, and Disconnect seen as "disconnected". No crash.
+
+## Plan: G5 and G6 (agreed 2026-10-27)
+Out of scope, after discussion: host migration between paired phones, relay chains
+(E -> D -> C -> B) and open channels that strangers join. Each costs more than it gives for this
+app, and can't be tested properly with two phones. Open channels would also break the app's privacy
+promise.
+
+### G5: rides that tolerate distance
+- **Host in the middle.** The hosting phone matters most: everyone's range is measured from it.
+  - The member line marks it: "Redmi (host)".
+  - Each member's link quality comes from what the hub actually receives: good, fair, weak, or
+    out of range. The host sends it in the roster, so every phone can see whose link is weak and
+    who would make a better host.
+- **Dropping out gracefully.**
+  - A phone that loses the group keeps trying to rejoin for the whole ride (30 min instead of
+    90 s).
+  - If it was in the group talk, it rejoins the talk by itself once the link is back.
+  - Everyone sees "Galaxy (out of range)" instead of silence.
+- **A clear ending.**
+  - On the hosting phone, Disconnect asks first when other phones depend on it: "End the group
+    for everyone?"
+  - Members tell "the host ended the group" apart from "lost the host".
+
+### G6: ride codes
+- **Starting:** a rider taps **Start a ride**, and the app shows a short code (three words) and a
+  QR code. The others enter it once.
+- **Joining:** any phone with the code joins automatically when in range, with no pairing,
+  Connect or system prompt. That includes riders who come back after dropping out.
+- **Finding the group:**
+  - the host advertises a tag derived from the code over Wi-Fi Direct service discovery;
+  - the group's name and Wi-Fi password are derived from the code, so joining needs no prompt;
+  - a phone that finds nobody hosts. If two start hosting at once, the lower key gives way.
+- **Security:**
+  - joining uses a password-based handshake (PAKE, from a well-reviewed library), so a short
+    code can't be tested offline by someone recording the radio;
+  - the code expires after the ride (24 h at most);
+  - the host can block a phone by key, or start a new code.
+- **Scope:**
+  - code members get group talk only, with no 1:1 calls;
+  - they appear as "joined with the ride code";
+  - they can pair properly afterwards.
+- **Host hand-over:** if the host leaves, the next phone with the code hosts and the others join
+  it.
