@@ -65,6 +65,14 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // Bouncy Castle ships data files the app never uses (post-quantum tables, certificate-path
+    // messages); R8 removes unused classes but not resources, so they are left out here.
+    packaging {
+        resources {
+            excludes += listOf("org/bouncycastle/pqc/**", "org/bouncycastle/x509/**")
+        }
+    }
 }
 
 // The Compose group-mapping file only improves Compose stack traces in the Play Console; producing
@@ -81,6 +89,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // J-PAKE for ride codes (Phase 7, G6): a reviewed implementation instead of home-made crypto.
+    implementation(libs.bouncycastle.prov)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)

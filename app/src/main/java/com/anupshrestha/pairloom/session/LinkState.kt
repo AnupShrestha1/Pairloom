@@ -42,6 +42,9 @@ enum class FailureKind {
     /** The pairing exchange itself failed, for example a broken commitment. */
     PAIRING_FAILED,
 
+    /** Joining a ride: the two phones hold different ride codes (or the host is slowing down guesses). */
+    RIDE_CODE_REJECTED,
+
     /** The paired-device store could not be read or written; sessions are refused. */
     TRUST_STORE_ERROR,
 }

@@ -274,4 +274,5 @@
     <string name="btn_end_group">End for everyone</string>
     <string name="btn_keep_group">Keep the group</string>
     <string name="group_ended_by">%1$s ended the group.</string>
+    <string name="failed_ride_code">The ride code does not match. Check the three words with the others.</string>
 </resources>

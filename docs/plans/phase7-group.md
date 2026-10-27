@@ -251,3 +251,46 @@ promise.
   5. The A03s showed "Redmi ended the group."
 - Not checked on phones: "out of range" and the link-quality labels for a real third phone (the
   virtual phone is in-process, so its link is always good).
+
+## G6a results: ride code core (2026-10-27)
+- **One design change from the plan: nothing public comes from the code.** About 16.7 million
+  three-word codes are far too few to hide behind Wi-Fi's password. If the group name or the
+  Wi-Fi password were derived from the code, someone recording one member joining could try every
+  code offline in seconds. So:
+  - a ride's Wi-Fi Direct group has a random name, which the host advertises (G6b);
+  - its Wi-Fi password is a public constant, so it protects nothing, and it was never meant to:
+    the audio is protected by TLS and per-member keys as before;
+  - the code is tested only inside the J-PAKE handshake, which allows one guess per connection
+    attempt.
+
+  Anyone can join a ride's Wi-Fi group, but they can't join the ride or hear it.
+- **`security/RideCode`**:
+  - three words from a 256-word list of short, common words;
+  - lenient parsing (any case, any separators);
+  - the code never appears in `toString`, so it can't leak into a log.
+- **`session/RideJoin`**:
+  - J-PAKE (RFC 8236) from Bouncy Castle 1.80.2, over the 2048-bit NIST group with SHA-256,
+    inside the mutual TLS link, with key confirmation in round 3;
+  - the secret also includes both TLS key fingerprints, so someone in the middle with keys of
+    their own fails even with the right code;
+  - the result is 32 shared bytes.
+- **`session/RideGuard`**: after 5 wrong codes in a minute, the host refuses joins until the
+  minute is over.
+- **Protocol**:
+  - RIDE_PAKE (round, up to six signed numbers);
+  - frames up to 4 KB;
+  - a new failure: "The ride code does not match".
+- **Bouncy Castle**:
+  - the app's first third-party library, taken from the offline Gradle cache;
+  - its unused data files (post-quantum tables, certificate messages) are left out of the APK,
+    so the release APK stays at 1.5 MB.
+- **Tests**: 138. They cover:
+  - parsing;
+  - the same code giving both phones the same secret, and a new secret on each join;
+  - a wrong code rejected;
+  - someone in the middle rejected;
+  - the guard;
+  - the wire format and malformed frames.
+- **Next (G6b)**: Start a ride and Join a ride in the app; the host advertising the ride over
+  Wi-Fi Direct service discovery; members finding it, joining and running RideJoin; ride members
+  in the group talk; rejoining with the code during the ride.

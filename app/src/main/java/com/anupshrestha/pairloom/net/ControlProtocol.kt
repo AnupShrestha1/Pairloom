@@ -19,7 +19,7 @@ import java.io.InputStream
 object ControlProtocol {
     const val MAGIC = "PLM1"
     const val VERSION = 7
-    const val MAX_FRAME_BODY = 1024
+    const val MAX_FRAME_BODY = 4096
     const val MAX_NAME_BYTES = 64
     const val INSTALL_ID_BYTES = 16
     const val PAIRING_VALUE_BYTES = 32
@@ -42,6 +42,11 @@ object ControlProtocol {
     private const val TYPE_GROUP_LEAVE = 16
     private const val TYPE_GROUP_ROSTER = 17
     private const val TYPE_FLOOR = 18
+    private const val TYPE_RIDE_PAKE = 19
+
+    /** A J-PAKE value is at most a 2048-bit number, signed (proofs may be negative); a round sends at most six. */
+    const val MAX_PAKE_VALUE_BYTES = 257
+    const val MAX_PAKE_VALUES = 6
 
     /** The most members a roster lists (with 64-byte names it still fits in one frame). */
     const val MAX_ROSTER = 12
@@ -126,6 +131,9 @@ object ControlProtocol {
 
         /** Host to members in the group talk: who has the floor (null: nobody). */
         data class Floor(val holderId: Int?) : Message
+
+        /** Ride codes: one J-PAKE round's numbers (session set-up only, inside TLS). */
+        data class RidePake(val round: Int, val values: List<java.math.BigInteger>) : Message
     }
 
     /**
@@ -282,6 +290,20 @@ object ControlProtocol {
                 out.writeByte(message.holderId ?: NOBODY)
             }
 
+            is Message.RidePake -> {
+                require(message.round in 1..3) { "J-PAKE round out of range" }
+                require(message.values.size in 1..MAX_PAKE_VALUES) { "wrong number of J-PAKE values" }
+                out.writeByte(TYPE_RIDE_PAKE)
+                out.writeByte(message.round)
+                out.writeByte(message.values.size)
+                for (v in message.values) {
+                    val bytes = v.toByteArray() // two's complement, so the sign survives
+                    require(bytes.size <= MAX_PAKE_VALUE_BYTES) { "J-PAKE value too large" }
+                    out.writeShort(bytes.size)
+                    out.write(bytes)
+                }
+            }
+
             is Message.GroupInfo -> {
                 require(GroupCredentials.isValid(message.networkName, message.passphrase)) { "invalid group credentials" }
                 out.writeByte(TYPE_GROUP_INFO)
@@ -397,6 +419,8 @@ object ControlProtocol {
 
             TYPE_GROUP_ROSTER -> decodeRoster(payload)
 
+            TYPE_RIDE_PAKE -> decodeRidePake(payload)
+
             TYPE_FLOOR -> {
                 if (payload.size != 1) throw ProtocolException("FLOOR must have a 1-byte payload")
                 Message.Floor((payload[0].toInt() and 0xFF).takeIf { it != NOBODY })
@@ -429,6 +453,24 @@ object ControlProtocol {
         val installId = payload.copyOfRange(idStart, nameLengthAt).joinToString("") { "%02x".format(it) }
         val name = String(payload, nameLengthAt + 1, nameLength, Charsets.UTF_8)
         return Message.Hello(version, installId, name)
+    }
+
+    private fun decodeRidePake(payload: ByteArray): Message.RidePake {
+        if (payload.size < 2) throw ProtocolException("RIDE_PAKE is too short")
+        val round = payload[0].toInt() and 0xFF
+        val count = payload[1].toInt() and 0xFF
+        if (round !in 1..3 || count !in 1..MAX_PAKE_VALUES) throw ProtocolException("RIDE_PAKE header is malformed")
+        var at = 2
+        val values = List(count) {
+            if (at + 2 > payload.size) throw ProtocolException("RIDE_PAKE is too short")
+            val n = ((payload[at].toInt() and 0xFF) shl 8) or (payload[at + 1].toInt() and 0xFF)
+            if (n == 0 || n > MAX_PAKE_VALUE_BYTES || at + 2 + n > payload.size) throw ProtocolException("RIDE_PAKE value is malformed")
+            val v = java.math.BigInteger(payload.copyOfRange(at + 2, at + 2 + n))
+            at += 2 + n
+            v
+        }
+        if (at != payload.size) throw ProtocolException("RIDE_PAKE has the wrong size")
+        return Message.RidePake(round, values)
     }
 
     private fun decodeRoster(payload: ByteArray): Message.GroupRoster {

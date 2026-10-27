@@ -511,6 +511,7 @@ private fun problemOf(link: LinkState): Pair<String, String?>? = when (link) {
             FailureKind.PAIRING_REJECTED -> R.string.failed_pairing_rejected
             FailureKind.PAIRING_TIMEOUT -> R.string.failed_pairing_timeout
             FailureKind.PAIRING_FAILED -> R.string.failed_pairing_failed
+            FailureKind.RIDE_CODE_REJECTED -> R.string.failed_ride_code
             FailureKind.TRUST_STORE_ERROR -> R.string.failed_trust_store
         },
     )
