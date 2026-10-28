@@ -126,6 +126,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     /** For a direct join of a paired phone: the group name to expect instead of an owner address. */
     private var targetGroupName: String? = null
 
+    /** Joining with a code: the device address of the phone whose group is being tried. */
+    private var codeTargetAddress: String? = null
+
     /** Key fingerprint of the phone on the current link (for storing its group). */
     @Volatile private var linkedPeerFingerprint: String? = null
     private var clientSinceMs: Long? = null
@@ -257,6 +260,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         requestedAtMs = SystemClock.elapsedRealtime()
         targetPeerAddress = peer.address
         targetGroupName = null
+        codeTargetAddress = null
         setLink(LinkState.Connecting(peer.name))
         log("Connecting to ${peer.name} (${peer.address}); the other phone may show an accept prompt")
         // Discovery is deliberately not stopped first: on some phones (observed on the Galaxy A03s)
@@ -341,9 +345,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      * (seen on the Redmi: it waited the full minute although the host was up after 15 s), so while
      * no group has formed the request is cancelled and made again every [DIRECT_RETRY_MS].
      */
-    private fun directJoinAttempt(credentials: GroupCredentials, target: PeerInfo, gen: Int, attempt: Int) {
+    private fun directJoinAttempt(credentials: GroupCredentials, target: PeerInfo, gen: Int, attempt: Int, ownerAddress: String? = null) {
         val c = controller ?: return
-        c.connectToGroup(credentials) { result ->
+        c.connectToGroup(credentials, ownerAddress) { result ->
             if (gen != generation) return@connectToGroup
             when {
                 result.ok && attempt == 1 -> {
@@ -365,7 +369,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             if (attempt == 1) log("${target.name}'s group is not there yet; asking again every ${DIRECT_RETRY_MS / 1000} s")
             c.cancelConnect {
                 if (gen == generation && !groupFormed && clientSinceMs == null && _ui.value.link is LinkState.Connecting) {
-                    directJoinAttempt(credentials, target, gen, attempt + 1)
+                    directJoinAttempt(credentials, target, gen, attempt + 1, ownerAddress)
                 }
             }
         }
@@ -1046,6 +1050,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         fallbackUsed = false
         targetPeerAddress = null
         targetGroupName = null
+        codeTargetAddress = null
         linkedPeerFingerprint = null
         clientSinceMs = null
         requestedAtMs = SystemClock.elapsedRealtime()
@@ -1070,7 +1075,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             if (gen != generation) return@clearStaleState
             eventsAccepted = true
             when (role) {
-                Role.HOST -> createGroup(gen, attempt = 1)
+                // A code group is advertised before the group forms: a service added while
+                // the group is being created is not answered (seen on a Redmi, Android 16).
+                Role.HOST -> codeGroup?.takeIf { it.isHost }?.wifi?.let { wifi ->
+                    c.advertiseCodeGroup(wifi.networkName) { r ->
+                        if (gen != generation) return@advertiseCodeGroup
+                        log(if (r.ok) "Advertising the group" else "Could not advertise the group")
+                        createGroup(gen, attempt = 1)
+                    }
+                } ?: createGroup(gen, attempt = 1)
                 Role.JOIN -> discover(gen, attempt = 1)
             }
         }
@@ -1086,7 +1099,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             when {
                 result.ok -> {
                     log("createGroup accepted by the system; waiting for the group to form")
-                    if (cg != null) advertiseCodeGroup(own.networkName, gen)
+                    if (cg != null) keepFindable(gen)
                 }
                 result.reason == WifiP2pManager.BUSY && attempt < MAX_BUSY_RETRIES ->
                     retryAfterBusy(gen) { createGroup(gen, attempt + 1) }
@@ -1097,13 +1110,11 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Code-group host: tells phones looking for a group that this one exists, and keeps this
-     * phone findable (peer discovery puts it in listen mode, which service discovery needs on
-     * some phones).
+     * Code-group host: keeps this phone findable (peer discovery puts it in listen mode, which
+     * service discovery needs on some phones).
      */
-    private fun advertiseCodeGroup(networkName: String, gen: Int) {
+    private fun keepFindable(gen: Int) {
         val c = controller ?: return
-        c.advertiseCodeGroup(networkName) { r -> if (gen == generation) log(if (r.ok) "Advertising the group" else "Could not advertise the group") }
         viewModelScope.launch {
             while (gen == generation) {
                 c.discoverPeers { }
@@ -1117,9 +1128,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val c = controller ?: return
         val g = codeGroup ?: return
         val search = {
-            c.findCodeGroups(onFound = { name ->
-                if (gen == generation && _ui.value.link is LinkState.Discovering && name !in g.rejected) joinCodeWifi(name, gen)
-            }) { r -> if (gen == generation && !r.ok) log("Searching for the group failed: ${WifiDirectController.reasonText(r.reason)}") }
+            c.findCodeGroups(onFound = { address -> tryCodeHost(address, gen) }) { r -> if (gen == generation && !r.ok) log("Searching for the group failed: ${WifiDirectController.reasonText(r.reason)}") }
         }
         log("Looking for the group that uses this join code")
         search()
@@ -1133,15 +1142,28 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun joinCodeWifi(networkName: String, gen: Int) {
+    /**
+     * Joining with a code: a phone that may host a code group, heard by service discovery or seen
+     * hosting a group in the peer list. Service discovery is not answered between some phones
+     * (a Redmi host and an A03s), so the peer list is the main way in.
+     */
+    private fun tryCodeHost(address: String, gen: Int) {
+        val g = codeGroup ?: return
+        if (gen != generation || g.isHost || _ui.value.link !is LinkState.Discovering || address in g.rejected) return
+        joinCodeWifi(address, gen)
+    }
+
+    private fun joinCodeWifi(ownerAddress: String, gen: Int) {
+        val networkName = GroupCredentials.CODE_GROUP_NAME_FIXED
         discoveryHintJob?.cancel()
         requestedAtMs = SystemClock.elapsedRealtime()
         targetPeerAddress = null
         targetGroupName = networkName
+        codeTargetAddress = ownerAddress
         setLink(LinkState.Connecting(""))
-        log("Found a group (Wi-Fi $networkName); joining it")
-        val target = PeerInfo("the group", "", WifiP2pDevice.AVAILABLE, isPhone = true)
-        directJoinAttempt(GroupCredentials(networkName, GroupCredentials.CODE_GROUP_PASSPHRASE), target, gen, attempt = 1)
+        log("Found a phone hosting a group; trying the code with it")
+        val target = PeerInfo("The host", ownerAddress, WifiP2pDevice.AVAILABLE, isPhone = true)
+        directJoinAttempt(GroupCredentials(networkName, GroupCredentials.CODE_GROUP_PASSPHRASE), target, gen, attempt = 1, ownerAddress = ownerAddress)
         timeoutJob?.cancel()
         timeoutJob = viewModelScope.launch {
             delay(CONNECT_TIMEOUT_MS)
@@ -1228,13 +1250,16 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun onPeers(peers: List<PeerInfo>) {
         val state = _ui.value.link as? LinkState.Discovering ?: return
         val sorted = peers.sortedWith(compareByDescending<PeerInfo> { it.isPhone }.thenBy { it.name })
-        log("Peers: ${sorted.joinToString { "${it.name}[${if (it.isPhone) "phone" else "other"},${statusName(it.status)}]" }.ifEmpty { "none" }}")
+        log("Peers: ${sorted.joinToString { "${it.name}[${if (it.isPhone) "phone" else "other"},${statusName(it.status)}${if (it.isGroupOwner) ",hosting" else ""}]" }.ifEmpty { "none" }}")
         _ui.update {
             it.copy(
                 link = state.copy(peers = sorted, noneFoundHint = false),
                 locationHint = if (sorted.isNotEmpty()) false else it.locationHint,
             )
         }
+        // Joining with a code: try a phone that hosts a group (the code decides if it is the one).
+        val g = codeGroup
+        if (g != null && !g.isHost) sorted.firstOrNull { it.isGroupOwner && it.address !in g.rejected }?.let { tryCodeHost(it.address, generation) }
     }
 
     private fun onConnectionChanged(event: P2pEvent.ConnectionChanged, gen: Int) {
@@ -1629,7 +1654,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         try {
             CodeJoin(cg.code, sec.identity.fingerprintHex, peerFingerprintHex).run(ch, isServer)
         } catch (e: SecurityFailure) {
-            if (isServer) cg.guard.failed() else targetGroupName?.let { cg.rejected += it }
+            if (isServer) cg.guard.failed() else codeTargetAddress?.let { cg.rejected += it }
             throw e
         }
         log("${hello.deviceName} holds the same join code")
@@ -1881,6 +1906,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         fallbackUsed = false
         targetPeerAddress = null
         targetGroupName = null
+        codeTargetAddress = null
         linkedPeerFingerprint = null
         clientSinceMs = null
 

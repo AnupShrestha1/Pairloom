@@ -8,6 +8,8 @@ data class PeerInfo(
     val address: String,
     val status: Int,
     val isPhone: Boolean,
+    /** The phone hosts a Wi-Fi Direct group right now. */
+    val isGroupOwner: Boolean = false,
 )
 
 enum class FailureKind {

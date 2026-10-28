@@ -1,19 +1,21 @@
 # Pairloom privacy policy
 
-_Last updated: 26 October 2026 (draft, to be published at a public URL before release)_
+_Last updated: 28 October 2026 (draft, to be published at a public URL before release)_
 
-Pairloom is a voice intercom for two Android phones that talk to each other directly over
-Wi-Fi Direct. It has no servers, no accounts and no analytics. The developer receives no data from
+Pairloom is a voice intercom for Android phones that talk to each other directly over
+Wi-Fi Direct, two at a time or as a group. It has no servers, no accounts and no analytics. The developer receives no data from
 the app.
 
 ## What the app handles, and where it goes
 | Data | Why | Where it goes |
 |---|---|---|
-| Your voice (microphone) | Calls and push-to-talk, only while you are in one | Straight to the other phone over Wi-Fi Direct, encrypted (AES-256-GCM). It is played there and not recorded or stored on either phone. |
-| Phone name (the model name, such as "SM-A037F") | Shows the other phone who is connecting | Sent to the other phone during a connection, and stored there if you pair. |
+| Your voice (microphone) | Calls and push-to-talk, only while you are in one | Straight to the other phone over Wi-Fi Direct, encrypted (AES-256-GCM). In a group, it goes to the phone that started the group, which passes it on, still encrypted, to the other members. It is played and not recorded or stored on any phone. |
+| Phone name (the model name, such as "SM-A037F") | Shows the other phones who is connecting or talking | Sent to the phones you connect with (in a group, to its members), and stored only if you pair. |
 | Pairing keys | Recognise a paired phone and keep the link private | Created on your phone and kept in its secure hardware storage (Android Keystore). Only the public part is shared with phones you connect to. |
 | List of paired phones | Connect to them again | Stored only on your phone. |
 | Wi-Fi Direct group name and password | Let your paired phones connect without a prompt | Stored on your phone and sent only to phones you have paired with, over the encrypted link. |
+| Join code (three words) | Let people join a group without pairing | Made up on the phone that starts the group and shown on its screen. It is never sent over the air: phones prove they know it without revealing it. It is forgotten when the group ends. |
+| Group announcement | Let phones with the code find the group | While a group is waiting for members, the phone announces a random group name nearby over Wi-Fi Direct. It contains nothing about you or the code. |
 
 Nothing above is sent to the developer or to anyone else. Pairloom does not use the internet,
 even though Android lists the "network" permission: Android requires it for any network

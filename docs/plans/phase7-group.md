@@ -300,3 +300,25 @@ promise.
 feature is now a **join code**: Start a group / Join with a code. Code: `JoinCode`, `CodeJoin`,
 `CodeGuard`, the CODE_PAKE message, and "-PairloomCode" Wi-Fi groups. G5's texts say "group" too.
 Older sections above keep the words they were written with.
+
+## G6b results: join codes in the app (2026-10-28)
+- **Screens**: Start a group and Join with a code, on Home and on the first screen (no pairing
+  needed). The host shows its three words while waiting, and "Join code: …" during the talk. A
+  joining phone shows "Looking for the group…". Leave the group replaces Disconnect, and private
+  calls are hidden in a code group.
+- **Finding the group**: service discovery (DNS-SD) was never answered between the Redmi host and
+  the A03s, even with the service added before the group was created. The joining phone therefore
+  also watches the peer list and tries any phone that hosts a group. All code groups share one
+  public Wi-Fi name ("DIRECT-PL-PairloomCode") and password, and the join picks the host by its
+  device address. Nothing about the Wi-Fi group comes from the code; J-PAKE inside TLS decides.
+  A host that failed the code is skipped for the rest of that search.
+- **Device check (Redmi hosting, A03s joining)**, all passed:
+  1. the Redmi starts a group and shows its code;
+  2. a wrong code: the A03s finds the group, J-PAKE fails, and it shows "The join code does not
+     match"; the Redmi keeps waiting;
+  3. the right code: found in 4 s, Wi-Fi joined after 17 s, J-PAKE and TLS 0.5 s later; both
+     phones are in the group talk by themselves, and the Redmi hears the A03s talk;
+  4. the A03s leaves; the Redmi goes back to waiting with the same code.
+- **Not checked**: more than one code group in range, and rejoining a code group after a drop.
+- **Version**: 0.7.0 (code 7). The store listing and privacy policy drafts now describe groups and
+  join codes.

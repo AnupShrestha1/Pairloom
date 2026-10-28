@@ -232,7 +232,10 @@ class WifiDirectController(
      * shows no prompt: knowing the passphrase is the permission. Which phone answers is still
      * checked by TLS against the paired key.
      */
-    fun connectToGroup(credentials: GroupCredentials, done: (P2pResult) -> Unit) {
+    fun connectToGroup(credentials: GroupCredentials, done: (P2pResult) -> Unit) = connectToGroup(credentials, null, done)
+
+    /** As above, but only to the group owned by [ownerAddress] (several groups may share a name). */
+    fun connectToGroup(credentials: GroupCredentials, ownerAddress: String?, done: (P2pResult) -> Unit) {
         if (Build.VERSION.SDK_INT < 29) {
             done(P2pResult(false, WifiP2pManager.ERROR))
             return
@@ -242,6 +245,7 @@ class WifiDirectController(
                 .setNetworkName(credentials.networkName)
                 .setPassphrase(credentials.passphrase)
                 .enablePersistentMode(false)
+                .apply { ownerAddress?.let { setDeviceAddress(MacAddress.fromString(it)) } }
                 .build()
         } catch (e: IllegalArgumentException) {
             log("Group join config rejected (${e.message})")
@@ -308,6 +312,7 @@ class WifiDirectController(
                         address = d.deviceAddress,
                         status = d.status,
                         isPhone = d.primaryDeviceType?.startsWith("10-") == true,
+                        isGroupOwner = d.isGroupOwner,
                     )
                 }
                 onEvent?.invoke(P2pEvent.PeersChanged(peers))
@@ -352,10 +357,11 @@ class WifiDirectController(
             done(P2pResult(false, REASON_NOT_STARTED))
             return
         }
-        m.setDnsSdResponseListeners(ch, { _, _, _ -> }) { fullDomain, record, _ ->
+        m.setDnsSdResponseListeners(ch, { _, _, _ -> }) { fullDomain, record, device ->
             val name = record?.get(CODE_KEY_GROUP)
-            if (fullDomain?.contains(CODE_SERVICE, ignoreCase = true) == true && name != null && GroupCredentials.isCodeGroupName(name)) {
-                handler.post { onFound(name) }
+            val address = device?.deviceAddress
+            if (fullDomain?.contains(CODE_SERVICE, ignoreCase = true) == true && name != null && address != null && GroupCredentials.isCodeGroupName(name)) {
+                handler.post { onFound(address) }
             }
         }
         val search = { request("discoverServices", done) { mm, cc, l -> mm.discoverServices(cc, l) } }

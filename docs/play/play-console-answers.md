@@ -5,16 +5,18 @@ wording when you fill it in: Google changes these forms from time to time.
 
 ## Store listing
 - **App name** (30 characters max): `Pairloom: Local Intercom`
-- **Short description** (80 max): `Talk between two phones over Wi-Fi Direct. No internet, no accounts.`
+- **Short description** (80 max): `Intercom and group walkie-talkie over Wi-Fi Direct. No internet, no accounts.`
 - **Full description**:
 
-> Pairloom turns two Android phones into a private intercom. The phones connect directly over
-> Wi-Fi Direct, with no router, no mobile data and no internet, and your voice never leaves the two
-> phones.
+> Pairloom turns Android phones into a private intercom. The phones connect directly over
+> Wi-Fi Direct, with no router, no mobile data and no internet, and your voice never leaves the
+> phones in the conversation.
 >
 > • Full-duplex calls on the earpiece, loudspeaker or a wired headset
 > • Push-to-talk, like a walkie-talkie: hold to talk, or tap to talk
 > • Pair once by comparing a 6-digit code; after that, connecting takes one tap on each phone
+> • Group push-to-talk: one phone starts a group and shows three words; others join by typing
+>   them, with no pairing. One person talks at a time and everyone else hears them
 > • Every link is encrypted: mutual TLS with keys kept in your phone's secure hardware, and
 >   AES-256-GCM for the audio
 > • No accounts, no ads, no analytics, nothing sent to any server
@@ -33,7 +35,7 @@ wording when you fill it in: Google changes these forms from time to time.
 - **Does your app collect or share any of the required user data types?** No.
   - Audio goes directly from one user's phone to the other user's phone, end-to-end encrypted, and
     the developer never receives it. Phone names, pairing keys and group credentials stay on the
-    two phones. Nothing is sent to the developer or to third parties. If Google's current
+    phones involved. Nothing is sent to the developer or to third parties. If Google's current
     definitions treat device-to-device audio as "collected", declare **Audio > Voice or sound
     recordings**: not shared, processed ephemerally, required for the app's function, encrypted in
     transit.
