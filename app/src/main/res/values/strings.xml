@@ -275,4 +275,17 @@
     <string name="btn_keep_group">Keep the group</string>
     <string name="group_ended_by">%1$s ended the group.</string>
     <string name="failed_join_code">The join code does not match. Check the three words with the others.</string>
+    <string name="btn_start_group">Start a group</string>
+    <string name="btn_join_with_code">Join with a code</string>
+    <string name="btn_leave_group">Leave the group</string>
+    <string name="join_code_title">Join with a code</string>
+    <string name="join_code_body">Type the three words shown on the phone that started the group.</string>
+    <string name="join_code_hint">maple lotus otter</string>
+    <string name="join_code_invalid">That is not a join code. It is three words, like the example.</string>
+    <string name="join_code_line">Join code: %1$s</string>
+    <string name="code_host_status">Join code. Waiting for others…</string>
+    <string name="code_host_body">Read these three words to the people joining. They tap Join with a code and type them. No pairing needed.</string>
+    <string name="code_joining_title">Joining with a code</string>
+    <string name="code_looking_status">Looking for the group…</string>
+    <string name="code_join_body">Stay near the phone that started the group.</string>
 </resources>

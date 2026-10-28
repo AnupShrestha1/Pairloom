@@ -59,6 +59,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import com.anupshrestha.pairloom.session.JoinCodeUi
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.AlertDialog
 import com.anupshrestha.pairloom.net.ControlProtocol.LinkQuality
 import com.anupshrestha.pairloom.session.GroupDetails
@@ -112,6 +116,10 @@ class ConnectionActions(
     val onGroupTalk: () -> Unit,
     /** Debug builds: add or remove the simulated group member on the hosting phone. */
     val onToggleVirtualPhone: () -> Unit = {},
+    /** "Start a group": this phone hosts a group others join with a code (Phase 7, G6). */
+    val onStartCodeGroup: () -> Unit = {},
+    /** "Join with a code"; false if the text is not a join code. */
+    val onJoinWithCode: (String) -> Boolean = { false },
     /** The talk button was pressed (true) or released (false). */
     val onTalk: (Boolean) -> Unit,
     val onToggleOpus: () -> Unit,
@@ -166,7 +174,7 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
                 else -> Screen.LINKED
             }
             link is LinkState.Pairing -> Screen.PAIRING
-            link is LinkState.Discovering && ui.waitingFor == null -> Screen.DISCOVERING
+            link is LinkState.Discovering && ui.waitingFor == null && ui.joinCode == null -> Screen.DISCOVERING
             link is LinkState.Discovering || link is LinkState.Hosting || link is LinkState.Connecting || link is LinkState.OpeningSocket -> Screen.CONNECTING
             pairingNew || device == null -> Screen.NEW_PHONE
             else -> Screen.HOME
@@ -181,10 +189,13 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
                 when (shown) {
                     Screen.RECONNECTING -> ui.reconnectingTo?.let { Reconnecting(it, ui.reconnectingGroup, actions) }
                     Screen.INCOMING, Screen.CALL, Screen.PTT, Screen.LINKED ->
-                        (link as? LinkState.Linked)?.let { Linked(it.details, ui.micDenied, actions) }
+                        (link as? LinkState.Linked)?.let { Linked(it.details, ui.micDenied, ui.joinCode, actions) }
                     Screen.PAIRING -> (link as? LinkState.Pairing)?.let { Pairing(it, actions) }
                     Screen.DISCOVERING -> (link as? LinkState.Discovering)?.let { Discovering(it, ui.waitingFor, actions) }
-                    Screen.CONNECTING -> if (link.isActive) Connecting(link, ui.waitingFor, actions)
+                    Screen.CONNECTING -> if (link.isActive) {
+                        val code = ui.joinCode
+                        if (code != null) CodeConnecting(link, code, actions) else Connecting(link, ui.waitingFor, actions)
+                    }
                     Screen.NEW_PHONE -> NewPhone(firstTime = device == null, ui = ui, actions = actions, onCancel = { pairingNew = false })
                     Screen.HOME -> device?.let { Home(it, ui, actions, onSelect = { fp -> selected = fp }, onPairNew = { pairingNew = true }) }
                 }
@@ -368,6 +379,7 @@ private fun ColumnScope.Home(
         if (device.canJoinDirectly && android.os.Build.VERSION.SDK_INT >= 29) {
             QuietButton(stringResource(R.string.btn_join_group_of, device.name), { actions.onConnectPaired(device.fingerprintHex) }, enabled = canStart)
         }
+        CodeGroupButtons(canStart, actions)
         SecondButton(stringResource(R.string.btn_pair_new), onPairNew, enabled = canStart)
     }
 }
@@ -417,6 +429,8 @@ private fun ColumnScope.NewPhone(firstTime: Boolean, ui: LinkUiState, actions: C
     ) {
         ChoiceButton(stringResource(R.string.btn_host), stringResource(R.string.host_explain), primary = true, enabled = !ui.cleaningUp, onClick = actions.onHost)
         ChoiceButton(stringResource(R.string.btn_join), stringResource(R.string.join_explain), primary = false, enabled = !ui.cleaningUp, onClick = actions.onJoin)
+        // A group by code needs no pairing at all, so it is offered on the first screen too.
+        if (firstTime) CodeGroupButtons(!ui.cleaningUp, actions)
         if (!firstTime) SecondButton(stringResource(R.string.btn_cancel), onCancel)
         ui.ownName?.let { own ->
             var renaming by rememberSaveable { mutableStateOf(false) }
@@ -625,7 +639,7 @@ private fun ColumnScope.Pairing(state: LinkState.Pairing, actions: ConnectionAct
 // ---- Linked ---------------------------------------------------------------------------------------
 
 @Composable
-private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions: ConnectionActions) {
+private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, joinCode: JoinCodeUi?, actions: ConnectionActions) {
     val threads = LocalThreads.current
     val inCall = details.mediaActive && details.mediaKind == MediaKind.VOICE
     val inPtt = details.mediaActive && details.mediaKind == MediaKind.PTT
@@ -659,10 +673,12 @@ private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions
             content = {
                 if (micDenied) Body(stringResource(R.string.call_mic_denied), MaterialTheme.colorScheme.error)
                 // More than two phones on the link: say who else is here.
-                details.group?.takeIf { it.members.size > 2 }?.let { GroupMembers(it) }
+                details.group?.takeIf { it.members.size > 2 || joinCode != null }?.let { GroupMembers(it) }
+                joinCode?.let { JoinCodeLine(it.words) }
             },
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // A group joined by code is for group talk only: no private calls with its members.
+            if (joinCode == null) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 BigButton(stringResource(R.string.btn_call), actions.onCall, Modifier.weight(1f), glyph = Glyph.CALL)
                 OutlinedButton(
                     onClick = actions.onPushToTalk,
@@ -680,8 +696,92 @@ private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions
                     enabled = !group.joining,
                 )
             }
-            DisconnectButton(details, actions)
+            DisconnectButton(details, joinCode != null, actions)
         }
+    }
+}
+
+/** "Join code: maple lotus otter", so someone can still be let in later. */
+@Composable
+private fun JoinCodeLine(words: String) {
+    Spacer(Modifier.height(10.dp))
+    Text(
+        stringResource(R.string.join_code_line, words),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+    )
+}
+
+/** Starting or joining a group by code: the host shows the code; a joining phone says what it does. */
+@Composable
+private fun ColumnScope.CodeConnecting(link: LinkState, code: JoinCodeUi, actions: ConnectionActions) {
+    Stage(
+        mode = RingsMode.SEEKING,
+        title = if (code.isHost) code.words else stringResource(R.string.code_joining_title),
+        status = stringResource(
+            when {
+                code.isHost -> R.string.code_host_status
+                link is LinkState.Discovering -> R.string.code_looking_status
+                else -> R.string.status_connecting_short
+            },
+        ),
+        content = { Body(stringResource(if (code.isHost) R.string.code_host_body else R.string.code_join_body)) },
+    ) {
+        OutlinedButton(onClick = actions.onDisconnect, shape = RoundedCornerShape(20.dp), colors = outlinedOnBackground(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
+            Text(stringResource(R.string.btn_cancel), style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/** "Start a group" and "Join with a code", side by side, with the dialog that asks for the code. */
+@Composable
+private fun CodeGroupButtons(enabled: Boolean, actions: ConnectionActions) {
+    var asking by rememberSaveable { mutableStateOf(false) }
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedButton(
+            onClick = actions.onStartCodeGroup,
+            enabled = enabled,
+            shape = RoundedCornerShape(20.dp),
+            colors = outlinedOnBackground(),
+            modifier = Modifier.weight(1f).heightIn(min = 52.dp),
+        ) { Text(stringResource(R.string.btn_start_group), style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center) }
+        OutlinedButton(
+            onClick = { asking = true },
+            enabled = enabled,
+            shape = RoundedCornerShape(20.dp),
+            colors = outlinedOnBackground(),
+            modifier = Modifier.weight(1f).heightIn(min = 52.dp),
+        ) { Text(stringResource(R.string.btn_join_with_code), style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center) }
+    }
+    if (asking) {
+        var text by rememberSaveable { mutableStateOf("") }
+        var wrong by rememberSaveable { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { asking = false },
+            title = { Text(stringResource(R.string.join_code_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.join_code_body), style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it; wrong = false },
+                        singleLine = true,
+                        isError = wrong,
+                        placeholder = { Text(stringResource(R.string.join_code_hint)) },
+                        supportingText = if (wrong) ({ Text(stringResource(R.string.join_code_invalid)) }) else null,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { if (actions.onJoinWithCode(text)) asking = false else wrong = true }) {
+                    Text(stringResource(R.string.btn_join))
+                }
+            },
+            dismissButton = { TextButton(onClick = { asking = false }) { Text(stringResource(R.string.btn_cancel)) } },
+        )
     }
 }
 
@@ -690,12 +790,12 @@ private fun ColumnScope.Linked(details: LinkDetails, micDenied: Boolean, actions
  * link), it asks first: the group ends for everyone.
  */
 @Composable
-private fun DisconnectButton(details: LinkDetails, actions: ConnectionActions) {
+private fun DisconnectButton(details: LinkDetails, codeGroup: Boolean, actions: ConnectionActions) {
     val others = details.group?.members.orEmpty()
         .filter { !it.isThisPhone && it.quality != LinkQuality.LOST }
         .map { it.name }
     var asking by rememberSaveable { mutableStateOf(false) }
-    SecondButton(stringResource(R.string.btn_disconnect), {
+    SecondButton(stringResource(if (codeGroup) R.string.btn_leave_group else R.string.btn_disconnect), {
         if (details.isGroupOwner && others.size > 1) asking = true else actions.onDisconnect()
     })
     if (asking) {

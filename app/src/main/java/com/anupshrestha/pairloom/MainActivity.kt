@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import com.anupshrestha.pairloom.security.JoinCode
 import android.graphics.Color as AndroidColor
 import com.anupshrestha.pairloom.session.Appearance
 import androidx.compose.runtime.DisposableEffect
@@ -82,6 +83,11 @@ class MainActivity : ComponentActivity() {
             onPushToTalk = { withMicrophone(viewModel::startPushToTalk) },
             onGroupTalk = { withMicrophone(viewModel::startGroupTalk) },
             onToggleVirtualPhone = viewModel::toggleVirtualPhone,
+            onStartCodeGroup = { requestThen { withMicrophone(viewModel::startCodeGroup) } },
+            onJoinWithCode = { text ->
+                // Checked here, so the dialog can say so; the permissions are asked for after.
+                JoinCode.parse(text) != null && true.also { requestThen { withMicrophone { viewModel.joinWithCode(text) } } }
+            },
             onTalk = viewModel::setTalking,
             onToggleOpus = viewModel::toggleOpus,
             onJoinPaired = viewModel::joinPaired,

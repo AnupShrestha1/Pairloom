@@ -48,6 +48,7 @@ import com.anupshrestha.pairloom.security.PairedDeviceStore
 import com.anupshrestha.pairloom.security.SecureHandshakeException
 import com.anupshrestha.pairloom.security.SecureTransport
 import com.anupshrestha.pairloom.security.toHex
+import com.anupshrestha.pairloom.security.JoinCode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -195,6 +196,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Starts a session in [role]. Ignored while a session is active or still cleaning up. */
     fun start(role: Role) {
+        // A paired session (Host, Join, Connect) is not a code group.
+        if (!_ui.value.link.isActive && !_ui.value.cleaningUp && codeGroup != null) setCodeGroup(null)
+        startSession(role)
+    }
+
+    private fun startSession(role: Role) {
         val state = _ui.value
         if (state.link.isActive || state.cleaningUp) {
             log("Ignored start request: a session is already active or being cleaned up")
@@ -425,11 +432,13 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                     delay(500)
                 }
                 if (SystemClock.elapsedRealtime() >= deadline) break
-                connect(peerFingerprintHex, asHost = if (inGroup) wasHost else null)
+                val cg = codeGroup
+                if (cg != null) startSession(if (cg.isHost) Role.HOST else Role.JOIN) else connect(peerFingerprintHex, asHost = if (inGroup) wasHost else null)
                 delay(2_000)
             }
             log("Could not reconnect within ${window / 1000} s")
             rejoinTalk = false
+            setCodeGroup(null)
             _ui.update { it.copy(reconnectingTo = null, reconnectingGroup = false) }
             if (_ui.value.link.isActive && _ui.value.link !is LinkState.Linked) {
                 teardown(LinkState.Disconnected(DisconnectReason.LINK_TIMEOUT, null), sendBye = false)
@@ -534,6 +543,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     /** Cancels a session in progress, or disconnects an established link. */
     fun disconnect() {
         stopReconnecting()
+        if (_ui.value.link !is LinkState.Linked && codeGroup != null) setCodeGroup(null)
         val wasLinked = _ui.value.link is LinkState.Linked
         log(if (wasLinked) "Disconnecting" else "Cancelling")
         teardown(
@@ -557,6 +567,47 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var group: GroupMemberLink? = null
     @Volatile private var primaryMemberId: Int? = null
     @Volatile private var groupLocal: InetAddress? = null
+
+    /**
+     * A group joined by code (Phase 7, G6): the code, this phone's role, and on the host the
+     * Wi-Fi Direct group (a random name and a public password; see [GroupCredentials.codeGroup]).
+     * Kept across drops, so reconnecting uses the same code.
+     */
+    private class CodeGroup(val code: JoinCode, val isHost: Boolean, val wifi: GroupCredentials?) {
+        val guard = CodeGuard()
+
+        /** Wi-Fi groups that turned out to hold a different code: not tried again. */
+        val rejected: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+    }
+
+    @Volatile private var codeGroup: CodeGroup? = null
+
+    private fun setCodeGroup(g: CodeGroup?) {
+        codeGroup = g
+        _ui.update { it.copy(joinCode = g?.let { c -> JoinCodeUi(c.code.spoken, c.isHost) }) }
+    }
+
+    /** "Start a group": a new join code, and this phone hosts. RECORD_AUDIO is already granted. */
+    fun startCodeGroup() {
+        if (_ui.value.link.isActive || _ui.value.cleaningUp) return
+        setCodeGroup(CodeGroup(JoinCode.generate(), isHost = true, wifi = GroupCredentials.codeGroup()))
+        log("Started a group with a join code")
+        startSession(Role.HOST)
+    }
+
+    /** "Join with a code". Returns false if [text] is not a join code. */
+    fun joinWithCode(text: String): Boolean {
+        val code = JoinCode.parse(text) ?: return false
+        if (_ui.value.link.isActive || _ui.value.cleaningUp) return true
+        if (Build.VERSION.SDK_INT < 29) {
+            setLink(LinkState.Failed(FailureKind.UNSUPPORTED, "joining with a code needs Android 10 or later"))
+            return true
+        }
+        setCodeGroup(CodeGroup(code, isHost = false, wifi = null))
+        log("Joining a group with a join code")
+        startSession(Role.JOIN)
+        return true
+    }
 
     /** Debug builds (G3): a simulated member on the hosting phone, see [VirtualPhone]. */
     @Volatile private var virtualPhone: Closeable? = null
@@ -769,9 +820,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun setUpGroup(isGroupOwner: Boolean, local: InetAddress, remote: InetAddress, ch: ControlChannel, peerName: String, peerKey: String) {
         setUpGroupLinks(isGroupOwner, local, remote, ch, peerName, peerKey)
         val g = group ?: return
-        if (rejoinTalk) {
+        if (rejoinTalk || codeGroup != null) {
+            log(if (rejoinTalk) "Back after a drop: rejoining the group talk" else "Joining the group talk (join code)")
             rejoinTalk = false
-            log("Back after a drop: rejoining the group talk")
             viewModelScope.launch(Dispatchers.IO) {
                 delay(REJOIN_TALK_DELAY_MS) // the host sets up its side of the link first
                 if (group === g && media?.isBusy != true) runCatching { g.join() }.onFailure { log("Could not rejoin the group talk: ${it.message}") }
@@ -829,7 +880,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { log("Group message failed: ${it.message}") }
             return
         }
-        if (message is ControlProtocol.Message.MediaOffer && group?.isBusy == true) {
+        if (message is ControlProtocol.Message.MediaOffer && (group?.isBusy == true || codeGroup != null)) {
             // One microphone: a call cannot start while this phone is in the group talk.
             log("Declined the other phone's call: this phone is in the group talk")
             runCatching { channel?.sendMessage(ControlProtocol.Message.MediaStop) }
@@ -1028,11 +1079,15 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     private fun createGroup(gen: Int, attempt: Int) {
         val c = controller ?: return
         requestedAtMs = SystemClock.elapsedRealtime()
-        val own = security?.ownGroup ?: GroupCredentials.generate()
+        val cg = codeGroup?.takeIf { it.isHost }
+        val own = cg?.wifi ?: security?.ownGroup ?: GroupCredentials.generate()
         c.createGroup(own, groupChannel()) { result ->
             if (gen != generation) return@createGroup
             when {
-                result.ok -> log("createGroup accepted by the system; waiting for the group to form")
+                result.ok -> {
+                    log("createGroup accepted by the system; waiting for the group to form")
+                    if (cg != null) advertiseCodeGroup(own.networkName, gen)
+                }
                 result.reason == WifiP2pManager.BUSY && attempt < MAX_BUSY_RETRIES ->
                     retryAfterBusy(gen) { createGroup(gen, attempt + 1) }
 
@@ -1041,7 +1096,67 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Code-group host: tells phones looking for a group that this one exists, and keeps this
+     * phone findable (peer discovery puts it in listen mode, which service discovery needs on
+     * some phones).
+     */
+    private fun advertiseCodeGroup(networkName: String, gen: Int) {
+        val c = controller ?: return
+        c.advertiseCodeGroup(networkName) { r -> if (gen == generation) log(if (r.ok) "Advertising the group" else "Could not advertise the group") }
+        viewModelScope.launch {
+            while (gen == generation) {
+                c.discoverPeers { }
+                delay(CODE_LISTEN_MS)
+            }
+        }
+    }
+
+    /** Joining with a code: look for advertised groups and try each one (the code decides). */
+    private fun findCodeGroup(gen: Int) {
+        val c = controller ?: return
+        val g = codeGroup ?: return
+        val search = {
+            c.findCodeGroups(onFound = { name ->
+                if (gen == generation && _ui.value.link is LinkState.Discovering && name !in g.rejected) joinCodeWifi(name, gen)
+            }) { r -> if (gen == generation && !r.ok) log("Searching for the group failed: ${WifiDirectController.reasonText(r.reason)}") }
+        }
+        log("Looking for the group that uses this join code")
+        search()
+        discoveryHintJob?.cancel()
+        discoveryHintJob = viewModelScope.launch {
+            while (true) {
+                delay(CODE_SEARCH_MS)
+                if (gen != generation || _ui.value.link !is LinkState.Discovering) break
+                search()
+            }
+        }
+    }
+
+    private fun joinCodeWifi(networkName: String, gen: Int) {
+        discoveryHintJob?.cancel()
+        requestedAtMs = SystemClock.elapsedRealtime()
+        targetPeerAddress = null
+        targetGroupName = networkName
+        setLink(LinkState.Connecting(""))
+        log("Found a group (Wi-Fi $networkName); joining it")
+        val target = PeerInfo("the group", "", WifiP2pDevice.AVAILABLE, isPhone = true)
+        directJoinAttempt(GroupCredentials(networkName, GroupCredentials.CODE_GROUP_PASSPHRASE), target, gen, attempt = 1)
+        timeoutJob?.cancel()
+        timeoutJob = viewModelScope.launch {
+            delay(CONNECT_TIMEOUT_MS)
+            if (gen == generation && _ui.value.link is LinkState.Connecting) {
+                log("Joining the group timed out after ${CONNECT_TIMEOUT_MS / 1000} s")
+                fail(FailureKind.CONNECT_TIMEOUT, null)
+            }
+        }
+    }
+
     private fun discover(gen: Int, attempt: Int) {
+        if (codeGroup?.isHost == false) {
+            findCodeGroup(gen)
+            return
+        }
         val c = controller ?: return
         c.discoverPeers { result ->
             if (gen != generation) return@discoverPeers
@@ -1333,7 +1448,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 return secure(socket, isServer = true, registry = registry, gen = gen, allowPairing = allowPairing)
             } catch (e: SecurityFailure) {
                 discard(socket, registry)
-                if (e.kind != FailureKind.SECURE_HANDSHAKE_FAILED) throw e
+                if (e.kind != FailureKind.SECURE_HANDSHAKE_FAILED && e.kind != FailureKind.JOIN_CODE_REJECTED) throw e
                 log("Rejected connection from ${remote?.hostAddress}: ${e.message}")
             } catch (e: ControlProtocol.VersionMismatchException) {
                 discard(socket, registry)
@@ -1480,13 +1595,45 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         log("TLS ${tls.protocol} ${tls.cipherSuite}; peer key ${Fingerprints.short(tls.peerFingerprint.toHex())}")
         val ch = ControlChannel(tls.socket) { log(it) }
         try {
-            val negotiator = SessionNegotiator(sec.identity.fingerprint, sec.installId, names.ownName, sec.store, { log(it) })
-            val peer = negotiator.negotiate(ch, isServer, tls.peerFingerprint, PromptFor(gen), allowPairing)
+            val cg = codeGroup
+            val peer = if (cg != null) {
+                codeNegotiate(ch, isServer, tls.peerFingerprint.toHex(), cg)
+            } else {
+                SessionNegotiator(sec.identity.fingerprint, sec.installId, names.ownName, sec.store, { log(it) })
+                    .negotiate(ch, isServer, tls.peerFingerprint, PromptFor(gen), allowPairing)
+            }
             return Established(ch, peer, tls.protocol, tls.cipherSuite, socket.localAddress, socket.inetAddress)
         } catch (e: Throwable) {
             ch.close(sendBye = false)
             throw e
         }
+    }
+
+    /**
+     * A code group's session start, instead of pairing: HELLO both ways (names), then the J-PAKE
+     * join ([CodeJoin]) bound to both TLS keys. Nothing is stored: the peer is a member for as long
+     * as the group lasts. The host refuses joins for a minute after repeated wrong codes.
+     */
+    private fun codeNegotiate(ch: ControlChannel, isServer: Boolean, peerFingerprintHex: String, cg: CodeGroup): SessionPeer {
+        val sec = security ?: throw SecurityFailure(FailureKind.IDENTITY_UNAVAILABLE, "identity not loaded")
+        val own = ControlProtocol.Message.Hello(ControlProtocol.VERSION, sec.installId, names.ownName)
+        val hello = if (isServer) {
+            ch.sendMessage(own)
+            ch.expect<ControlProtocol.Message.Hello>(HANDSHAKE_TIMEOUT_MS * 2)
+        } else {
+            ch.expect<ControlProtocol.Message.Hello>(HANDSHAKE_TIMEOUT_MS * 2).also { ch.sendMessage(own) }
+        }
+        if (isServer && !cg.guard.mayTry()) {
+            throw SecurityFailure(FailureKind.JOIN_CODE_REJECTED, "too many wrong codes; waiting a minute before the next try")
+        }
+        try {
+            CodeJoin(cg.code, sec.identity.fingerprintHex, peerFingerprintHex).run(ch, isServer)
+        } catch (e: SecurityFailure) {
+            if (isServer) cg.guard.failed() else targetGroupName?.let { cg.rejected += it }
+            throw e
+        }
+        log("${hello.deviceName} holds the same join code")
+        return SessionPeer(hello.deviceName, peerFingerprintHex, hello.installIdHex, newlyPaired = false)
     }
 
     /** Shows the pairing code through [LinkState.Pairing] and waits for [answerPairing]. */
@@ -1529,7 +1676,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val peerName = names.nickname(established.peer.fingerprintHex) ?: established.peer.name
         channel = ch
         // Keep the stored name current if the other phone was renamed (shown when not linked).
-        security?.let { sec ->
+        if (codeGroup == null) security?.let { sec ->
             viewModelScope.launch(Dispatchers.IO) {
                 runCatching { if (sec.store.updateName(established.peer.fingerprintHex, established.peer.name)) refreshPaired() }
             }
@@ -1554,7 +1701,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         if (details.newlyPaired) refreshPaired()
         linkedPeerFingerprint = established.peer.fingerprintHex
         // Tell the (authenticated, paired) peer this phone's group, so it can join directly later.
-        security?.ownGroup?.let { own ->
+        // Only paired phones get this phone's own group (a code member is not trusted that far).
+        if (codeGroup == null) security?.ownGroup?.let { own ->
             viewModelScope.launch(Dispatchers.IO) {
                 runCatching { ch.sendMessage(ControlProtocol.Message.GroupInfo(own.networkName, own.passphrase, staFrequencyMhz() ?: 0)) }
                     .onFailure { log("Could not send this phone's group: ${it.message}") }
@@ -1679,7 +1827,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             linked != null && finalState is LinkState.Disconnected && finalState.reason in DROP_REASONS
         }
         // More than two phones, or a group talk, counts as a group.
-        val inGroup = (group?.roster?.size ?: 0) > 2 || group?.isBusy == true
+        val inGroup = (group?.roster?.size ?: 0) > 2 || group?.isBusy == true || codeGroup != null
         val wasHost = linked?.details?.isGroupOwner == true
         if (droppedPeer != null) {
             media?.kind?.takeIf { media?.session != null && it != MediaKind.TONE }?.let { lastEnd = it to MediaEnd.LINK_LOST }
@@ -1768,7 +1916,22 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (finalState != null) setLink(finalState)
-        if (droppedPeer != null) startReconnecting(droppedPeer, inGroup, wasHost)
+        if (droppedPeer != null) {
+            startReconnecting(droppedPeer, inGroup, wasHost)
+        } else if (finalState != null && reconnectJob?.isActive != true && codeGroup != null) {
+            val cg = codeGroup
+            if (cg != null && cg.isHost && finalState is LinkState.Disconnected && finalState.reason != DisconnectReason.LOCAL) {
+                // The last member left: the group goes on, waiting for others with the same code.
+                log("Everyone left; waiting with the same join code")
+                viewModelScope.launch {
+                    while (_ui.value.cleaningUp) delay(200)
+                    if (codeGroup === cg && !_ui.value.link.isActive) startSession(Role.HOST)
+                }
+            } else {
+                // Ended, cancelled, or failed outside reconnecting: the code group is over.
+                setCodeGroup(null)
+            }
+        }
     }
 
     // ---- Helpers -----------------------------------------------------------------------------
@@ -1900,6 +2063,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         /** How long a dropped group keeps trying to come back (people can be out of range for a while). */
         const val GROUP_RECONNECT_WINDOW_MS = 30 * 60_000L
         const val REJOIN_TALK_DELAY_MS = 1_000L
+
+        /** Joining with a code: how often to search for the group again. */
+        const val CODE_SEARCH_MS = 10_000L
+
+        /** A code group's host: how often to stay in listen mode for searching phones. */
+        const val CODE_LISTEN_MS = 25_000L
 
         /** How a link to a paired phone ends when nobody chose to end it. */
         val DROP_REASONS = setOf(DisconnectReason.LINK_TIMEOUT, DisconnectReason.GROUP_ENDED, DisconnectReason.IO_ERROR)

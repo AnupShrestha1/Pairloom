@@ -158,6 +158,9 @@ data class GroupDetails(
     val floorIsMine: Boolean,
 )
 
+/** The join code of the group this phone started or joined; [words] as they are read out. */
+data class JoinCodeUi(val words: String, val isHost: Boolean)
+
 data class GroupMemberUi(
     val name: String,
     val inTalk: Boolean,
@@ -229,6 +232,8 @@ data class LinkUiState(
     val reconnectingGroup: Boolean = false,
     /** A member phone whose host ended the group: the host's name, until the next link starts. */
     val groupEndedBy: String? = null,
+    /** A group joined by code (Phase 7, G6), while it lasts. */
+    val joinCode: JoinCodeUi? = null,
     /** The paired phone a home-screen Connect is waiting for (until the link ends). */
     val waitingFor: String? = null,
     /** Diagnostics: whether this phone offers Opus for voice. */
