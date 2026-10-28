@@ -331,21 +331,21 @@ class WifiDirectController(
         }
     }
 
-    // ---- Rides (Phase 7, G6): Wi-Fi Direct service discovery ----------------------------------
+    // ---- Join-code groups (Phase 7, G6): Wi-Fi Direct service discovery----------------------------
 
-    /** The ride host: advertises "a Pairloom ride, group [groupName]" to phones looking for rides. */
-    fun advertiseRide(groupName: String, done: (P2pResult) -> Unit) {
-        val info = WifiP2pDnsSdServiceInfo.newInstance(RIDE_INSTANCE, RIDE_SERVICE, mapOf(RIDE_KEY_GROUP to groupName, "v" to "1"))
-        request("addLocalService(ride)", done) { m, ch, l -> m.addLocalService(ch, info, l) }
+    /** The host of a join-code group: advertises "a Pairloom group, Wi-Fi group [groupName]" to phones looking for one. */
+    fun advertiseCodeGroup(groupName: String, done: (P2pResult) -> Unit) {
+        val info = WifiP2pDnsSdServiceInfo.newInstance(CODE_INSTANCE, CODE_SERVICE, mapOf(CODE_KEY_GROUP to groupName, "v" to "1"))
+        request("addLocalService(code group)", done) { m, ch, l -> m.addLocalService(ch, info, l) }
     }
 
-    private var rideRequestAdded = false
+    private var codeRequestAdded = false
 
     /**
-     * A phone joining a ride: looks for advertised rides and reports each group name heard (on the
+     * A phone joining with a code: looks for advertised groups and reports each group name heard (on the
      * main thread). One search lasts a while; call it again to keep looking.
      */
-    fun findRides(onFound: (String) -> Unit, done: (P2pResult) -> Unit) {
+    fun findCodeGroups(onFound: (String) -> Unit, done: (P2pResult) -> Unit) {
         val m = manager
         val ch = channel
         if (m == null || ch == null) {
@@ -353,28 +353,28 @@ class WifiDirectController(
             return
         }
         m.setDnsSdResponseListeners(ch, { _, _, _ -> }) { fullDomain, record, _ ->
-            val name = record?.get(RIDE_KEY_GROUP)
-            if (fullDomain?.contains(RIDE_SERVICE, ignoreCase = true) == true && name != null && GroupCredentials.isRideName(name)) {
+            val name = record?.get(CODE_KEY_GROUP)
+            if (fullDomain?.contains(CODE_SERVICE, ignoreCase = true) == true && name != null && GroupCredentials.isCodeGroupName(name)) {
                 handler.post { onFound(name) }
             }
         }
         val search = { request("discoverServices", done) { mm, cc, l -> mm.discoverServices(cc, l) } }
-        if (rideRequestAdded) {
+        if (codeRequestAdded) {
             search()
             return
         }
-        request("addServiceRequest(ride)", { r ->
+        request("addServiceRequest(code group)", { r ->
             if (r.ok) {
-                rideRequestAdded = true
+                codeRequestAdded = true
                 search()
             } else {
                 done(r)
             }
-        }) { mm, cc, l -> mm.addServiceRequest(cc, WifiP2pDnsSdServiceRequest.newInstance(RIDE_SERVICE), l) }
+        }) { mm, cc, l -> mm.addServiceRequest(cc, WifiP2pDnsSdServiceRequest.newInstance(CODE_SERVICE), l) }
     }
 
     private fun clearServices(done: () -> Unit) {
-        rideRequestAdded = false
+        codeRequestAdded = false
         request("clearLocalServices", { _ ->
             request("clearServiceRequests", { _ -> done() }) { m, ch, l -> m.clearServiceRequests(ch, l) }
         }) { m, ch, l -> m.clearLocalServices(ch, l) }
@@ -504,9 +504,9 @@ class WifiDirectController(
         private const val MAX_GONE_POLLS = 10
         private const val GONE_POLL_MS = 300L
 
-        private const val RIDE_INSTANCE = "Pairloom ride"
-        private const val RIDE_SERVICE = "_pairloomride._tcp"
-        private const val RIDE_KEY_GROUP = "g"
+        private const val CODE_INSTANCE = "Pairloom group"
+        private const val CODE_SERVICE = "_pairloomcode._tcp"
+        private const val CODE_KEY_GROUP = "g"
 
         fun reasonText(reason: Int): String = when (reason) {
             WifiP2pManager.ERROR -> "internal error"

@@ -294,3 +294,9 @@ promise.
 - **Next (G6b)**: Start a ride and Join a ride in the app; the host advertising the ride over
   Wi-Fi Direct service discovery; members finding it, joining and running RideJoin; ride members
   in the group talk; rejoining with the code during the ride.
+
+## Naming (2026-10-28)
+"Ride" was only the user's example of a group out and about, not what the app is for. The
+feature is now a **join code**: Start a group / Join with a code. Code: `JoinCode`, `CodeJoin`,
+`CodeGuard`, the CODE_PAKE message, and "-PairloomCode" Wi-Fi groups. G5's texts say "group" too.
+Older sections above keep the words they were written with.

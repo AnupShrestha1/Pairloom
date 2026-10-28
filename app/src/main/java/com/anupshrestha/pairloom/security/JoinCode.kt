@@ -3,40 +3,40 @@ package com.anupshrestha.pairloom.security
 import java.security.SecureRandom
 
 /**
- * A ride code (Phase 7, G6): three words such as "maple river stone", read out once at the start
- * of a ride. Anyone with the code joins the ride automatically when in range; nobody else can.
+ * A join code (Phase 7, G6): three words such as "maple lotus otter", read out once when a group
+ * starts. Anyone with the code joins the group automatically when in range; nobody else can.
  *
  * Three words from [WORDS] (256 each) give about 16.7 million codes. That is far too few to use
  * the code as a key directly, so nothing public is ever derived from it: it is only tested inside
- * the J-PAKE handshake ([RideJoin]), one guess per connection, and the host slows down repeated
- * failures ([RideGuard]).
+ * the J-PAKE handshake ([CodeJoin]), one guess per connection, and the host slows down repeated
+ * failures ([CodeGuard]).
  */
-class RideCode private constructor(val words: List<String>) {
+class JoinCode private constructor(val words: List<String>) {
     /** The canonical form, the same on every phone: "maple-river-stone". */
     val text: String get() = words.joinToString("-")
 
     /** How it is shown and read out. */
     val spoken: String get() = words.joinToString(" ")
 
-    override fun equals(other: Any?): Boolean = other is RideCode && other.words == words
+    override fun equals(other: Any?): Boolean = other is JoinCode && other.words == words
     override fun hashCode(): Int = words.hashCode()
 
     /** The code is a secret: it never goes into a log by accident. */
-    override fun toString(): String = "RideCode(<hidden>)"
+    override fun toString(): String = "JoinCode(<hidden>)"
 
     companion object {
         const val WORD_COUNT = 3
 
-        fun generate(random: SecureRandom = SecureRandom()): RideCode = RideCode(List(WORD_COUNT) { WORDS[random.nextInt(WORDS.size)] })
+        fun generate(random: SecureRandom = SecureRandom()): JoinCode = JoinCode(List(WORD_COUNT) { WORDS[random.nextInt(WORDS.size)] })
 
         /**
          * Reads what someone typed: any case, any separators ("Maple river-STONE", "maple,river
          * stone"). Returns null unless it is exactly three words from the list.
          */
-        fun parse(input: String): RideCode? {
+        fun parse(input: String): JoinCode? {
             val parts = input.lowercase().split(Regex("[^a-z]+")).filter { it.isNotEmpty() }
             if (parts.size != WORD_COUNT || parts.any { it !in WORD_SET }) return null
-            return RideCode(parts)
+            return JoinCode(parts)
         }
 
         /** The words a code is made of: short, common and easy to say, each one different. */
@@ -75,7 +75,7 @@ class RideCode private constructor(val words: List<String>) {
         private val WORD_SET = WORDS.toHashSet()
 
         init {
-            check(WORDS.size == 256 && WORD_SET.size == 256) { "the ride-code word list must hold 256 different words" }
+            check(WORDS.size == 256 && WORD_SET.size == 256) { "the join-code word list must hold 256 different words" }
         }
     }
 }

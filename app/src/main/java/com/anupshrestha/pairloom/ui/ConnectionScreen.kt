@@ -179,7 +179,7 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
         ) { shown ->
             Column(Modifier.fillMaxSize()) {
                 when (shown) {
-                    Screen.RECONNECTING -> ui.reconnectingTo?.let { Reconnecting(it, ui.reconnectingRide, actions) }
+                    Screen.RECONNECTING -> ui.reconnectingTo?.let { Reconnecting(it, ui.reconnectingGroup, actions) }
                     Screen.INCOMING, Screen.CALL, Screen.PTT, Screen.LINKED ->
                         (link as? LinkState.Linked)?.let { Linked(it.details, ui.micDenied, actions) }
                     Screen.PAIRING -> (link as? LinkState.Pairing)?.let { Pairing(it, actions) }
@@ -511,7 +511,7 @@ private fun problemOf(link: LinkState): Pair<String, String?>? = when (link) {
             FailureKind.PAIRING_REJECTED -> R.string.failed_pairing_rejected
             FailureKind.PAIRING_TIMEOUT -> R.string.failed_pairing_timeout
             FailureKind.PAIRING_FAILED -> R.string.failed_pairing_failed
-            FailureKind.RIDE_CODE_REJECTED -> R.string.failed_ride_code
+            FailureKind.JOIN_CODE_REJECTED -> R.string.failed_join_code
             FailureKind.TRUST_STORE_ERROR -> R.string.failed_trust_store
         },
     )
@@ -586,12 +586,12 @@ private fun ColumnScope.Discovering(state: LinkState.Discovering, waitingFor: St
 }
 
 @Composable
-private fun ColumnScope.Reconnecting(peer: String, ride: Boolean, actions: ConnectionActions) {
+private fun ColumnScope.Reconnecting(peer: String, inGroup: Boolean, actions: ConnectionActions) {
     Stage(
         mode = RingsMode.SEEKING,
         title = peer,
         status = stringResource(R.string.status_reconnecting),
-        content = { Body(if (ride) stringResource(R.string.reconnecting_ride_body, peer) else stringResource(R.string.reconnecting_body)) },
+        content = { Body(if (inGroup) stringResource(R.string.reconnecting_group_body, peer) else stringResource(R.string.reconnecting_body)) },
     ) {
         OutlinedButton(onClick = actions.onDisconnect, shape = RoundedCornerShape(20.dp), colors = outlinedOnBackground(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             Text(stringResource(R.string.btn_cancel), style = MaterialTheme.typography.labelLarge)

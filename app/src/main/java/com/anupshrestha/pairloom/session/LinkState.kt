@@ -42,8 +42,8 @@ enum class FailureKind {
     /** The pairing exchange itself failed, for example a broken commitment. */
     PAIRING_FAILED,
 
-    /** Joining a ride: the two phones hold different ride codes (or the host is slowing down guesses). */
-    RIDE_CODE_REJECTED,
+    /** Joining with a code: the two phones hold different join codes (or the host is slowing down guesses). */
+    JOIN_CODE_REJECTED,
 
     /** The paired-device store could not be read or written; sessions are refused. */
     TRUST_STORE_ERROR,
@@ -225,8 +225,8 @@ data class LinkUiState(
     val micDenied: Boolean = false,
     /** The paired phone being reconnected to after a dropped link, while that runs. */
     val reconnectingTo: String? = null,
-    /** The dropped link was a group (a ride): reconnecting runs much longer. */
-    val reconnectingRide: Boolean = false,
+    /** The dropped link was a group: reconnecting runs much longer. */
+    val reconnectingGroup: Boolean = false,
     /** A member phone whose host ended the group: the host's name, until the next link starts. */
     val groupEndedBy: String? = null,
     /** The paired phone a home-screen Connect is waiting for (until the link ends). */

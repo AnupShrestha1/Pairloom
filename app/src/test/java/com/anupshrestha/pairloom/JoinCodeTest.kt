@@ -3,10 +3,10 @@ package com.anupshrestha.pairloom
 import com.anupshrestha.pairloom.net.ControlChannel
 import com.anupshrestha.pairloom.net.ControlProtocol
 import com.anupshrestha.pairloom.net.ControlProtocol.Message
-import com.anupshrestha.pairloom.security.RideCode
+import com.anupshrestha.pairloom.security.JoinCode
 import com.anupshrestha.pairloom.session.FailureKind
-import com.anupshrestha.pairloom.session.RideGuard
-import com.anupshrestha.pairloom.session.RideJoin
+import com.anupshrestha.pairloom.session.CodeGuard
+import com.anupshrestha.pairloom.session.CodeJoin
 import com.anupshrestha.pairloom.session.SecurityFailure
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -27,8 +27,8 @@ import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/** Ride codes (Phase 7, G6): the words, the J-PAKE join over a real socket, and the guard. */
-class RideCodeTest {
+/** Join codes (Phase 7, G6): the words, the J-PAKE join over a real socket, and the guard. */
+class JoinCodeTest {
     private val sockets = mutableListOf<Socket>()
 
     @After
@@ -36,22 +36,22 @@ class RideCodeTest {
 
     @Test
     fun codesAreThreeListWordsAndParseLeniently() {
-        val c = RideCode.generate()
+        val c = JoinCode.generate()
         assertEquals(3, c.words.size)
-        assertTrue(c.words.all { it in RideCode.WORDS })
-        assertEquals(c, RideCode.parse(c.spoken))
-        assertEquals(c, RideCode.parse(c.text.uppercase()))
-        assertNull(RideCode.parse("maple river tractor")) // "tractor" is not a list word
-        val ok = RideCode.parse("Maple  lotus-OTTER")
+        assertTrue(c.words.all { it in JoinCode.WORDS })
+        assertEquals(c, JoinCode.parse(c.spoken))
+        assertEquals(c, JoinCode.parse(c.text.uppercase()))
+        assertNull(JoinCode.parse("maple river tractor")) // "tractor" is not a list word
+        val ok = JoinCode.parse("Maple  lotus-OTTER")
         assertNotNull(ok)
         assertEquals("maple-lotus-otter", ok!!.text)
-        assertNull(RideCode.parse("maple lotus"))
-        assertNull(RideCode.parse("maple lotus otter owl"))
-        assertEquals("RideCode(<hidden>)", ok.toString())
+        assertNull(JoinCode.parse("maple lotus"))
+        assertNull(JoinCode.parse("maple lotus otter owl"))
+        assertEquals("JoinCode(<hidden>)", ok.toString())
         // Generation covers the list (a rough check that every word can come up).
         val seen = HashSet<String>()
         val r = SecureRandom()
-        repeat(2_000) { seen += RideCode.generate(r).words }
+        repeat(2_000) { seen += JoinCode.generate(r).words }
         assertTrue("saw ${seen.size} of 256 words", seen.size > 240)
     }
 
@@ -70,14 +70,14 @@ class RideCodeTest {
 
     /** Runs the host and the member at once; each result is the shared secret or the failure. */
     private fun join(
-        hostCode: RideCode, memberCode: RideCode,
+        hostCode: JoinCode, memberCode: JoinCode,
         hostSees: String = memberFp, memberSees: String = hostFp,
     ): Pair<Result<ByteArray>, Result<ByteArray>> {
         val (hc, mc) = channels()
         val pool = Executors.newFixedThreadPool(2)
         try {
-            val h = pool.submit(Callable { runCatching { RideJoin(hostCode, hostFp, hostSees).run(hc, isHost = true) }.also { if (it.isFailure) hc.close() } })
-            val m = pool.submit(Callable { runCatching { RideJoin(memberCode, memberFp, memberSees).run(mc, isHost = false) }.also { if (it.isFailure) mc.close() } })
+            val h = pool.submit(Callable { runCatching { CodeJoin(hostCode, hostFp, hostSees).run(hc, isHost = true) }.also { if (it.isFailure) hc.close() } })
+            val m = pool.submit(Callable { runCatching { CodeJoin(memberCode, memberFp, memberSees).run(mc, isHost = false) }.also { if (it.isFailure) mc.close() } })
             return h.get(30, TimeUnit.SECONDS) to m.get(30, TimeUnit.SECONDS)
         } finally {
             pool.shutdownNow()
@@ -88,8 +88,8 @@ class RideCodeTest {
 
     @Test
     fun theSameCodeGivesBothPhonesTheSameSecret() {
-        val code = RideCode.generate()
-        val (h, m) = join(code, RideCode.parse(code.spoken)!!)
+        val code = JoinCode.generate()
+        val (h, m) = join(code, JoinCode.parse(code.spoken)!!)
         assertArrayEquals(h.getOrThrow(), m.getOrThrow())
         assertEquals(32, h.getOrThrow().size)
         // A second join with the same code gives a different secret (fresh randomness every time).
@@ -99,25 +99,25 @@ class RideCodeTest {
 
     @Test
     fun aWrongCodeIsRejectedOnBothSides() {
-        val code = RideCode.parse("maple lotus otter")!!
-        val (h, m) = join(code, RideCode.parse("maple lotus owl")!!)
-        assertEquals(FailureKind.RIDE_CODE_REJECTED, kind(h))
+        val code = JoinCode.parse("maple lotus otter")!!
+        val (h, m) = join(code, JoinCode.parse("maple lotus owl")!!)
+        assertEquals(FailureKind.JOIN_CODE_REJECTED, kind(h))
         assertTrue(m.isFailure) // rejected, or cut off when the host gives up
     }
 
     @Test
     fun someoneInTheMiddleWithTheirOwnTlsKeysFailsEvenWithTheCode() {
         // Each side sees a different peer key than the other side has: the link is not one TLS session.
-        val code = RideCode.generate()
+        val code = JoinCode.generate()
         val (h, m) = join(code, code, hostSees = "cc".repeat(32))
-        assertEquals(FailureKind.RIDE_CODE_REJECTED, kind(h))
+        assertEquals(FailureKind.JOIN_CODE_REJECTED, kind(h))
         assertTrue(m.isFailure)
     }
 
     @Test
     fun theGuardSlowsDownRepeatedWrongCodes() {
         var now = 0L
-        val g = RideGuard(maxFailures = 3, windowMs = 60_000) { now }
+        val g = CodeGuard(maxFailures = 3, windowMs = 60_000) { now }
         repeat(3) { assertTrue(g.mayTry()); g.failed() }
         assertFalse(g.mayTry())
         now = 59_999
@@ -129,7 +129,7 @@ class RideCodeTest {
     @Test
     fun pakeMessagesRoundTripAndBadOnesAreRejected() {
         val big = BigInteger.ONE.shiftLeft(2047).add(BigInteger.valueOf(12345)) // a full 2048-bit value
-        val m = Message.RidePake(1, listOf(big, BigInteger.ONE, BigInteger.ZERO, big.negate(), big, BigInteger.valueOf(-5)))
+        val m = Message.CodePake(1, listOf(big, BigInteger.ONE, BigInteger.ZERO, big.negate(), big, BigInteger.valueOf(-5)))
         val bytes = ControlProtocol.encode(m)
         assertTrue(bytes.size - 4 <= ControlProtocol.MAX_FRAME_BODY)
         assertEquals(m, ControlProtocol.read(ByteArrayInputStream(bytes)))
@@ -145,6 +145,6 @@ class RideCodeTest {
         )) {
             assertThrows(ControlProtocol.ProtocolException::class.java) { ControlProtocol.read(ByteArrayInputStream(bad)) }
         }
-        assertThrows(IllegalArgumentException::class.java) { ControlProtocol.encode(Message.RidePake(1, listOf(BigInteger.ONE.shiftLeft(3000)))) }
+        assertThrows(IllegalArgumentException::class.java) { ControlProtocol.encode(Message.CodePake(1, listOf(BigInteger.ONE.shiftLeft(3000)))) }
     }
 }

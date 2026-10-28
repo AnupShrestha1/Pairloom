@@ -405,12 +405,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
      * After a dropped link: runs Connect again (same roles, from the keys) until the link is back
      * or [RECONNECT_WINDOW_MS] has passed. The other phone does the same, since it saw the drop too.
      */
-    private fun startReconnecting(peerFingerprintHex: String, ride: Boolean, wasHost: Boolean) {
+    private fun startReconnecting(peerFingerprintHex: String, inGroup: Boolean, wasHost: Boolean) {
         reconnectJob?.cancel()
-        // A ride (a group) keeps trying much longer, and in the same role: a member that joined
+        // A group keeps trying much longer, and in the same role: a member that joined
         // the host's group must not start hosting because of the keys.
-        val window = if (ride) RIDE_RECONNECT_WINDOW_MS else RECONNECT_WINDOW_MS
-        log("The link dropped; reconnecting for up to ${window / 1000} s${if (ride) " (a ride)" else ""}")
+        val window = if (inGroup) GROUP_RECONNECT_WINDOW_MS else RECONNECT_WINDOW_MS
+        log("The link dropped; reconnecting for up to ${window / 1000} s${if (inGroup) " (a group)" else ""}")
         reconnectJob = viewModelScope.launch {
             val deadline = SystemClock.elapsedRealtime() + window
             while (SystemClock.elapsedRealtime() < deadline) {
@@ -418,19 +418,19 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 while (_ui.value.cleaningUp || _ui.value.link.isActive) {
                     if (_ui.value.link is LinkState.Linked) {
                         log("Reconnected")
-                        _ui.update { it.copy(reconnectingTo = null, reconnectingRide = false) }
+                        _ui.update { it.copy(reconnectingTo = null, reconnectingGroup = false) }
                         return@launch
                     }
                     if (SystemClock.elapsedRealtime() >= deadline) break
                     delay(500)
                 }
                 if (SystemClock.elapsedRealtime() >= deadline) break
-                connect(peerFingerprintHex, asHost = if (ride) wasHost else null)
+                connect(peerFingerprintHex, asHost = if (inGroup) wasHost else null)
                 delay(2_000)
             }
             log("Could not reconnect within ${window / 1000} s")
             rejoinTalk = false
-            _ui.update { it.copy(reconnectingTo = null, reconnectingRide = false) }
+            _ui.update { it.copy(reconnectingTo = null, reconnectingGroup = false) }
             if (_ui.value.link.isActive && _ui.value.link !is LinkState.Linked) {
                 teardown(LinkState.Disconnected(DisconnectReason.LINK_TIMEOUT, null), sendBye = false)
             }
@@ -441,10 +441,10 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         reconnectJob?.cancel()
         reconnectJob = null
         rejoinTalk = false
-        if (_ui.value.reconnectingTo != null) _ui.update { it.copy(reconnectingTo = null, reconnectingRide = false) }
+        if (_ui.value.reconnectingTo != null) _ui.update { it.copy(reconnectingTo = null, reconnectingGroup = false) }
     }
 
-    /** After a dropped ride: join the group talk again once the link is back, as before the drop. */
+    /** After a dropped group: join the group talk again once the link is back, as before the drop. */
     @Volatile private var rejoinTalk = false
 
     /** A direct join waiting for the join screen to open ([connectPaired]). */
@@ -1678,18 +1678,18 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         val droppedPeer = linkedPeerFingerprint.takeIf {
             linked != null && finalState is LinkState.Disconnected && finalState.reason in DROP_REASONS
         }
-        // A group with more than two phones, or a group talk, counts as a ride.
-        val ride = (group?.roster?.size ?: 0) > 2 || group?.isBusy == true
+        // More than two phones, or a group talk, counts as a group.
+        val inGroup = (group?.roster?.size ?: 0) > 2 || group?.isBusy == true
         val wasHost = linked?.details?.isGroupOwner == true
         if (droppedPeer != null) {
             media?.kind?.takeIf { media?.session != null && it != MediaKind.TONE }?.let { lastEnd = it to MediaEnd.LINK_LOST }
             if (group?.session != null) lastEnd = MediaKind.PTT to MediaEnd.LINK_LOST
-            rejoinTalk = ride && group?.isBusy == true
+            rejoinTalk = inGroup && group?.isBusy == true
             // Before the link state changes, so the notification (and the foreground service) stays.
-            _ui.update { it.copy(reconnectingTo = linked?.details?.peerName, reconnectingRide = ride) }
+            _ui.update { it.copy(reconnectingTo = linked?.details?.peerName, reconnectingGroup = inGroup) }
         }
         // A member told the group is over (the host's goodbye) says so, rather than "disconnected".
-        if (linked != null && !wasHost && ride && finalState is LinkState.Disconnected && finalState.reason == DisconnectReason.PEER_CLOSED) {
+        if (linked != null && !wasHost && inGroup && finalState is LinkState.Disconnected && finalState.reason == DisconnectReason.PEER_CLOSED) {
             _ui.update { it.copy(groupEndedBy = linked.details.peerName) }
         }
         generation++
@@ -1768,7 +1768,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (finalState != null) setLink(finalState)
-        if (droppedPeer != null) startReconnecting(droppedPeer, ride, wasHost)
+        if (droppedPeer != null) startReconnecting(droppedPeer, inGroup, wasHost)
     }
 
     // ---- Helpers -----------------------------------------------------------------------------
@@ -1897,8 +1897,8 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
         const val RECONNECT_WINDOW_MS = 90_000L
         const val BYE_GRACE_MS = 300L
 
-        /** How long a dropped ride keeps trying to come back (a ride can take people out of range for a while). */
-        const val RIDE_RECONNECT_WINDOW_MS = 30 * 60_000L
+        /** How long a dropped group keeps trying to come back (people can be out of range for a while). */
+        const val GROUP_RECONNECT_WINDOW_MS = 30 * 60_000L
         const val REJOIN_TALK_DELAY_MS = 1_000L
 
         /** How a link to a paired phone ends when nobody chose to end it. */

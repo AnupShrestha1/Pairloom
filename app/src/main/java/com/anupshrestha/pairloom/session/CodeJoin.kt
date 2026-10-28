@@ -3,7 +3,7 @@ package com.anupshrestha.pairloom.session
 import com.anupshrestha.pairloom.net.ControlChannel
 import com.anupshrestha.pairloom.net.ControlProtocol
 import com.anupshrestha.pairloom.net.ControlProtocol.Message
-import com.anupshrestha.pairloom.security.RideCode
+import com.anupshrestha.pairloom.security.JoinCode
 import org.bouncycastle.crypto.CryptoException
 import org.bouncycastle.crypto.agreement.jpake.JPAKEParticipant
 import org.bouncycastle.crypto.agreement.jpake.JPAKEPrimeOrderGroups
@@ -16,7 +16,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 
 /**
- * Joining a ride with its code (Phase 7, G6): J-PAKE (RFC 8236, Bouncy Castle's implementation,
+ * Joining a group with its code (Phase 7, G6): J-PAKE (RFC 8236, Bouncy Castle's implementation,
  * over the 2048-bit NIST group) inside the mutual TLS link, after the TLS handshake. Both phones
  * prove they hold the same code without showing it, and a wrong guess teaches an attacker nothing
  * to test other codes with offline. Round 3 confirms the key, so both sides know the outcome.
@@ -27,10 +27,10 @@ import java.security.SecureRandom
  *
  * The host speaks first, as in the rest of the session set-up. Blocking reads; run it off the
  * main thread. Returns 32 bytes both phones now share; throws [SecurityFailure] with
- * [FailureKind.RIDE_CODE_REJECTED] if the codes differ.
+ * [FailureKind.JOIN_CODE_REJECTED] if the codes differ.
  */
-class RideJoin(
-    private val code: RideCode,
+class CodeJoin(
+    private val code: JoinCode,
     private val ownFingerprintHex: String,
     private val peerFingerprintHex: String,
     private val random: SecureRandom = SecureRandom(),
@@ -47,10 +47,10 @@ class RideJoin(
         try {
             // Each round: the host sends first, the member answers, then both check.
             fun exchange(round: Int, own: List<BigInteger>): List<BigInteger> = if (isHost) {
-                channel.sendMessage(Message.RidePake(round, own))
+                channel.sendMessage(Message.CodePake(round, own))
                 receive(channel, round)
             } else {
-                receive(channel, round).also { channel.sendMessage(Message.RidePake(round, own)) }
+                receive(channel, round).also { channel.sendMessage(Message.CodePake(round, own)) }
             }
 
             val r1 = me.createRound1PayloadToSend()
@@ -67,7 +67,7 @@ class RideJoin(
             val p3 = exchange(3, listOf(me.createRound3PayloadToSend(keying).macTag))
             if (p3.size != 1) throw rejected("round 3 has ${p3.size} values")
             me.validateRound3PayloadReceived(JPAKERound3Payload(peerId, p3[0]), keying)
-            return MessageDigest.getInstance("SHA-256").digest("pairloom-ride-v1".toByteArray() + keying.toByteArray())
+            return MessageDigest.getInstance("SHA-256").digest("pairloom-code-v1".toByteArray() + keying.toByteArray())
         } catch (e: CryptoException) {
             // A wrong code shows up here, at the latest in round 3's key confirmation.
             throw rejected(e.message ?: "J-PAKE failed", e)
@@ -77,26 +77,26 @@ class RideJoin(
     }
 
     private fun receive(channel: ControlChannel, round: Int): List<BigInteger> {
-        val m = channel.expect<Message.RidePake>(messageTimeoutMs)
+        val m = channel.expect<Message.CodePake>(messageTimeoutMs)
         if (m.round != round) throw ControlProtocol.ProtocolException("expected J-PAKE round $round, got ${m.round}")
         return m.values
     }
 
     private fun rejected(detail: String, cause: Throwable? = null) =
-        SecurityFailure(FailureKind.RIDE_CODE_REJECTED, "the ride codes differ ($detail)", cause)
+        SecurityFailure(FailureKind.JOIN_CODE_REJECTED, "the join codes differ ($detail)", cause)
 
     companion object {
-        private const val HOST = "pairloom-ride-host"
-        private const val MEMBER = "pairloom-ride-member"
+        private const val HOST = "pairloom-code-host"
+        private const val MEMBER = "pairloom-code-member"
     }
 }
 
 /**
  * The host's brake on guessing: after [maxFailures] wrong codes within [windowMs], further joins
  * are refused until the window has passed. With about 16.7 million codes, a few guesses a minute
- * get an attacker nowhere during a ride. Thread-safe.
+ * get an attacker nowhere while the group lasts. Thread-safe.
  */
-class RideGuard(
+class CodeGuard(
     private val maxFailures: Int = 5,
     private val windowMs: Long = 60_000,
     private val clock: () -> Long = System::currentTimeMillis,

@@ -31,18 +31,19 @@ class GroupCredentials(val networkName: String, val passphrase: String) {
         }
 
         /**
-         * A ride's group (Phase 7, G6): a random name, which the host advertises, and a public
-         * password. Nothing about it comes from the ride code; the ride is protected inside TLS by
-         * J-PAKE, so anyone may join the Wi-Fi group but nobody without the code joins the ride.
+         * A join-code group's Wi-Fi Direct group (Phase 7, G6): a random name, which the host
+         * advertises, and a public password. Nothing about it comes from the join code; the group
+         * is protected inside TLS by J-PAKE, so anyone may join the Wi-Fi group but nobody without
+         * the code joins the talk.
          */
-        fun ride(random: Random = SecureRandom()): GroupCredentials =
-            GroupCredentials("DIRECT-" + randomString(random, 2) + "-PairloomRide", RIDE_PASSPHRASE)
+        fun codeGroup(random: Random = SecureRandom()): GroupCredentials =
+            GroupCredentials("DIRECT-" + randomString(random, 2) + "-PairloomCode", CODE_GROUP_PASSPHRASE)
 
-        const val RIDE_PASSPHRASE = "pairloom-ride-open"
+        const val CODE_GROUP_PASSPHRASE = "pairloom-code-open"
 
-        private val RIDE_NAME = Regex("DIRECT-[A-Za-z0-9]{2}-PairloomRide")
+        private val CODE_GROUP_NAME = Regex("DIRECT-[A-Za-z0-9]{2}-PairloomCode")
 
-        fun isRideName(networkName: String): Boolean = RIDE_NAME.matches(networkName)
+        fun isCodeGroupName(networkName: String): Boolean = CODE_GROUP_NAME.matches(networkName)
 
         private val NAME = Regex("DIRECT-[A-Za-z0-9]{2}-Pairloom")
         private val PASSPHRASE = Regex("[A-Za-z0-9]{8,63}")

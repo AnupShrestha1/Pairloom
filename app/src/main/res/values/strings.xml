@@ -268,11 +268,11 @@
     <string name="group_host">host</string>
     <string name="group_weak_link">weak link</string>
     <string name="group_out_of_range">out of range</string>
-    <string name="reconnecting_ride_body">Lost the group. This phone keeps trying to rejoin %1$s for up to 30 minutes, and rejoins the group talk once it is back. Riding closer to the host helps.</string>
+    <string name="reconnecting_group_body">Lost the group. This phone keeps trying to rejoin %1$s for up to 30 minutes, and rejoins the group talk once it is back. Moving closer to the host helps.</string>
     <string name="end_group_title">End the group for everyone?</string>
     <string name="end_group_body">This phone hosts the group. %1$s will be disconnected too.</string>
     <string name="btn_end_group">End for everyone</string>
     <string name="btn_keep_group">Keep the group</string>
     <string name="group_ended_by">%1$s ended the group.</string>
-    <string name="failed_ride_code">The ride code does not match. Check the three words with the others.</string>
+    <string name="failed_join_code">The join code does not match. Check the three words with the others.</string>
 </resources>
