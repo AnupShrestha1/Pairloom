@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
             onPushToTalk = { withMicrophone(viewModel::startPushToTalk) },
             onGroupTalk = { withMicrophone(viewModel::startGroupTalk) },
             onToggleVirtualPhone = viewModel::toggleVirtualPhone,
+            onDismissCodeProblem = viewModel::dismissCodeProblem,
             onStartCodeGroup = { requestThen { withMicrophone(viewModel::startCodeGroup) } },
             onJoinWithCode = { text ->
                 // Checked here, so the dialog can say so; the permissions are asked for after.

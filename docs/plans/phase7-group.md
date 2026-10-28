@@ -322,3 +322,15 @@ Older sections above keep the words they were written with.
 - **Not checked**: more than one code group in range, and rejoining a code group after a drop.
 - **Version**: 0.7.0 (code 7). The store listing and privacy policy drafts now describe groups and
   join codes.
+
+## Release polish (2026-10-28)
+- **Wrong or failed code**: its own screen ("Joining the group", what went wrong, Try another
+  code, Back), not the paired-phone screen.
+- **Joining**: once the group is found, "Found the group. Connecting…" and "This can take up to
+  half a minute".
+- **Android 8-9**: Join with a code explains that these versions cannot join by code (they can
+  still start a group).
+- **Release build on the phones** (profile build: release code, debug key): the join-code check
+  passed all four steps (Bouncy Castle's J-PAKE works after R8), and a paired call linked, rang,
+  was answered and carried audio.
+- **Store screenshots** retaken (see Phase 4).

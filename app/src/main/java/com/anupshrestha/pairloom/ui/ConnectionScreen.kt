@@ -120,6 +120,8 @@ class ConnectionActions(
     val onStartCodeGroup: () -> Unit = {},
     /** "Join with a code"; false if the text is not a join code. */
     val onJoinWithCode: (String) -> Boolean = { false },
+    /** "Back" from a failed code join. */
+    val onDismissCodeProblem: () -> Unit = {},
     /** The talk button was pressed (true) or released (false). */
     val onTalk: (Boolean) -> Unit,
     val onToggleOpus: () -> Unit,
@@ -176,6 +178,7 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
             link is LinkState.Pairing -> Screen.PAIRING
             link is LinkState.Discovering && ui.waitingFor == null && ui.joinCode == null -> Screen.DISCOVERING
             link is LinkState.Discovering || link is LinkState.Hosting || link is LinkState.Connecting || link is LinkState.OpeningSocket -> Screen.CONNECTING
+            ui.codeProblem && !link.isActive -> Screen.CODE_FAILED
             pairingNew || device == null -> Screen.NEW_PHONE
             else -> Screen.HOME
         }
@@ -196,6 +199,7 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
                         val code = ui.joinCode
                         if (code != null) CodeConnecting(link, code, actions) else Connecting(link, ui.waitingFor, actions)
                     }
+                    Screen.CODE_FAILED -> CodeFailed(ui, actions)
                     Screen.NEW_PHONE -> NewPhone(firstTime = device == null, ui = ui, actions = actions, onCancel = { pairingNew = false })
                     Screen.HOME -> device?.let { Home(it, ui, actions, onSelect = { fp -> selected = fp }, onPairNew = { pairingNew = true }) }
                 }
@@ -204,7 +208,7 @@ fun ConnectionScreen(ui: LinkUiState, actions: ConnectionActions, modifier: Modi
     }
 }
 
-private enum class Screen { RECONNECTING, INCOMING, CALL, PTT, LINKED, PAIRING, DISCOVERING, CONNECTING, NEW_PHONE, HOME }
+private enum class Screen { RECONNECTING, INCOMING, CALL, PTT, LINKED, PAIRING, DISCOVERING, CONNECTING, CODE_FAILED, NEW_PHONE, HOME }
 
 @Composable
 private fun TopBar(onSettings: () -> Unit) {
@@ -723,15 +727,46 @@ private fun ColumnScope.CodeConnecting(link: LinkState, code: JoinCodeUi, action
             when {
                 code.isHost -> R.string.code_host_status
                 link is LinkState.Discovering -> R.string.code_looking_status
-                else -> R.string.status_connecting_short
+                else -> R.string.code_found_status
             },
         ),
-        content = { Body(stringResource(if (code.isHost) R.string.code_host_body else R.string.code_join_body)) },
+        content = {
+            Body(
+                stringResource(
+                    when {
+                        code.isHost -> R.string.code_host_body
+                        link is LinkState.Discovering -> R.string.code_join_body
+                        else -> R.string.code_found_body
+                    },
+                ),
+            )
+        },
     ) {
         OutlinedButton(onClick = actions.onDisconnect, shape = RoundedCornerShape(20.dp), colors = outlinedOnBackground(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
             Text(stringResource(R.string.btn_cancel), style = MaterialTheme.typography.labelLarge)
         }
     }
+}
+
+/** Joining or starting a group by code went wrong: say what happened and offer another code. */
+@Composable
+private fun ColumnScope.CodeFailed(ui: LinkUiState, actions: ConnectionActions) {
+    val problem = problemOf(ui.link)
+    var asking by rememberSaveable { mutableStateOf(false) }
+    Stage(
+        mode = RingsMode.APART,
+        title = stringResource(R.string.code_failed_title),
+        status = problem?.first ?: stringResource(R.string.status_failed),
+        statusColor = MaterialTheme.colorScheme.error,
+        content = {
+            problem?.second?.let { Body(it) }
+            LocationAndPermission(ui, actions)
+        },
+    ) {
+        BigButton(stringResource(R.string.btn_try_another_code), onClick = { asking = true }, enabled = !ui.cleaningUp)
+        SecondButton(stringResource(R.string.btn_back), actions.onDismissCodeProblem)
+    }
+    if (asking) JoinCodeDialog(actions, onClose = { asking = false })
 }
 
 /** "Start a group" and "Join with a code", side by side, with the dialog that asks for the code. */
@@ -754,11 +789,26 @@ private fun CodeGroupButtons(enabled: Boolean, actions: ConnectionActions) {
             modifier = Modifier.weight(1f).heightIn(min = 52.dp),
         ) { Text(stringResource(R.string.btn_join_with_code), style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center) }
     }
-    if (asking) {
+    if (asking) JoinCodeDialog(actions, onClose = { asking = false })
+}
+
+/** Asks for the three words. Android 9 and older cannot join a group by code, so it says so instead. */
+@Composable
+private fun JoinCodeDialog(actions: ConnectionActions, onClose: () -> Unit) {
+    if (android.os.Build.VERSION.SDK_INT < 29) {
+        AlertDialog(
+            onDismissRequest = onClose,
+            title = { Text(stringResource(R.string.join_code_title)) },
+            text = { Text(stringResource(R.string.join_code_old_android), style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.btn_ok)) } },
+        )
+        return
+    }
+    run {
         var text by rememberSaveable { mutableStateOf("") }
         var wrong by rememberSaveable { mutableStateOf(false) }
         AlertDialog(
-            onDismissRequest = { asking = false },
+            onDismissRequest = onClose,
             title = { Text(stringResource(R.string.join_code_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -776,11 +826,11 @@ private fun CodeGroupButtons(enabled: Boolean, actions: ConnectionActions) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { if (actions.onJoinWithCode(text)) asking = false else wrong = true }) {
+                TextButton(onClick = { if (actions.onJoinWithCode(text)) onClose() else wrong = true }) {
                     Text(stringResource(R.string.btn_join))
                 }
             },
-            dismissButton = { TextButton(onClick = { asking = false }) { Text(stringResource(R.string.btn_cancel)) } },
+            dismissButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.btn_cancel)) } },
         )
     }
 }

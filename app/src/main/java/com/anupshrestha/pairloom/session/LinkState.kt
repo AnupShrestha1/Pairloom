@@ -236,6 +236,8 @@ data class LinkUiState(
     val groupEndedBy: String? = null,
     /** A group joined by code (Phase 7, G6), while it lasts. */
     val joinCode: JoinCodeUi? = null,
+    /** A group joined or started by code failed or ended badly; the screen offers another code. */
+    val codeProblem: Boolean = false,
     /** The paired phone a home-screen Connect is waiting for (until the link ends). */
     val waitingFor: String? = null,
     /** Diagnostics: whether this phone offers Opus for voice. */

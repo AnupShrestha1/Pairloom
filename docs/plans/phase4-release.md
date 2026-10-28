@@ -114,9 +114,9 @@ interrupting phone call) carry over and are done in R5.
 - `docs/play/play-console-answers.md`: store listing text, Data safety ("no data collected or
   shared", with the fallback answer if Google counts device-to-device audio), app access
   instructions for reviewers (two phones needed), content rating and target audience answers.
-- `docs/play/screenshots/`: home, linked, call and push-to-talk from the Redmi (1080x2400). These
-  are drafts. Retake with a clean status bar (Android's demo mode) and real device names for the
-  store.
+- `docs/play/screenshots/`: retaken 2026-10-28 from the release build on the Redmi: home, a group's
+  join code, group talk, linked, call and push-to-talk. The status and navigation bars are cut off
+  and the images are 1080x2160 (Play allows at most 2:1; the phone's 1080x2400 is not accepted).
 
 ## Needs the user (to finish Phase 4)
 1. **Upload key**: create it and `keystore.properties` as in `docs/release.md`, then run

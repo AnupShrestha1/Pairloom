@@ -288,4 +288,10 @@
     <string name="code_joining_title">Joining with a code</string>
     <string name="code_looking_status">Looking for the group…</string>
     <string name="code_join_body">Stay near the phone that started the group.</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_try_another_code">Try another code</string>
+    <string name="code_failed_title">Joining the group</string>
+    <string name="code_found_status">Found the group. Connecting…</string>
+    <string name="code_found_body">This can take up to half a minute. Keep the phones close.</string>
+    <string name="join_code_old_android">This phone runs Android 9 or older, which cannot join a group with a code. It can still start a group for others to join, or pair with a phone.</string>
 </resources>

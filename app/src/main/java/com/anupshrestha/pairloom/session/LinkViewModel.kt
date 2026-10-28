@@ -201,6 +201,7 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
     fun start(role: Role) {
         // A paired session (Host, Join, Connect) is not a code group.
         if (!_ui.value.link.isActive && !_ui.value.cleaningUp && codeGroup != null) setCodeGroup(null)
+        dismissCodeProblem()
         startSession(role)
     }
 
@@ -588,7 +589,12 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun setCodeGroup(g: CodeGroup?) {
         codeGroup = g
-        _ui.update { it.copy(joinCode = g?.let { c -> JoinCodeUi(c.code.spoken, c.isHost) }) }
+        _ui.update { it.copy(joinCode = g?.let { c -> JoinCodeUi(c.code.spoken, c.isHost) }, codeProblem = false) }
+    }
+
+    /** "Back" from a failed code join: the normal start screen again. */
+    fun dismissCodeProblem() {
+        _ui.update { it.copy(codeProblem = false) }
     }
 
     /** "Start a group": a new join code, and this phone hosts. RECORD_AUDIO is already granted. */
@@ -1955,7 +1961,9 @@ class LinkViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } else {
                 // Ended, cancelled, or failed outside reconnecting: the code group is over.
+                val badly = finalState is LinkState.Failed || (finalState is LinkState.Disconnected && finalState.reason != DisconnectReason.LOCAL)
                 setCodeGroup(null)
+                if (badly) _ui.update { it.copy(codeProblem = true) }
             }
         }
     }
